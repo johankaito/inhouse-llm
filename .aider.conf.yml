@@ -1,0 +1,172 @@
+# Aider Configuration - Unlimited Access
+# Project: inhouse-llm
+# Purpose: Local AI coding assistant with full permissions
+
+##########################################################################
+# Model Configuration
+##########################################################################
+
+# Default model (fast, good for most tasks)
+model: ollama/qwen2.5-coder:7b
+
+# Alternative models (uncomment to use)
+# model: ollama/qwen2.5-coder:14b    # Higher quality
+# model: ollama/qwen2.5-coder:32b    # Best quality (slower)
+
+# Editor model (for complex refactoring)
+# edit-format: whole
+
+##########################################################################
+# File Access - UNLIMITED
+##########################################################################
+
+# Auto-add all relevant files (no restrictions)
+auto-commits: false
+
+# Read all file types
+# No restrictions on file extensions or paths
+
+# Watch for file changes
+watch-files: true
+
+##########################################################################
+# Git Integration
+##########################################################################
+
+# Git operations allowed
+git: true
+
+# Auto-add files to git
+auto-add: true
+
+# Dirty commits allowed (commit even with uncommitted changes)
+dirty-commits: true
+
+# Show diffs before applying
+show-diffs: true
+
+##########################################################################
+# Behavior Settings
+##########################################################################
+
+# Automatically fix lint errors
+auto-lint: true
+
+# Automatically run tests after changes
+# auto-test: false
+
+# Suggest shell commands when appropriate
+suggest-shell-commands: true
+
+# Voice input/output
+# voice-language: en
+
+##########################################################################
+# Context & Memory
+##########################################################################
+
+# Include repo map for better context
+map-tokens: 1024
+
+# Cache directory for better performance
+cache-prompts: true
+
+##########################################################################
+# Output & Formatting
+##########################################################################
+
+# Pretty print output
+pretty: true
+
+# Show token usage
+# show-model-warnings: true
+
+# Dark mode (for terminal)
+dark-mode: true
+
+# Markdown rendering
+fancy-input: true
+
+##########################################################################
+# Advanced Features
+##########################################################################
+
+# Allow Aider to execute shell commands
+# shell: true
+
+# Allow web search for additional context
+# web-search: false
+
+# Architect mode (for high-level planning)
+# architect: false
+
+##########################################################################
+# Ollama-Specific Settings
+##########################################################################
+
+# Ollama base URL (default: http://localhost:11434)
+# openai-api-base: http://localhost:11434
+
+# Verify SSL (set to false for local Ollama)
+verify-ssl: false
+
+##########################################################################
+# Performance Tuning
+##########################################################################
+
+# Max tokens for context
+# max-chat-history-tokens: 4096
+
+# Streaming responses
+stream: true
+
+# Number of threads for parallel operations
+# threads: 4
+
+##########################################################################
+# Security & Privacy
+##########################################################################
+
+# ALL operations are local - no data leaves your machine
+# No API keys needed for Ollama
+
+# Message history (stored locally)
+message-file: .aider.chat.history.md
+
+# Input history (stored locally)
+input-history-file: .aider.input.history
+
+##########################################################################
+# Notifications
+##########################################################################
+
+# Desktop notifications (optional)
+# notify: false
+
+##########################################################################
+# Environment Variables (Alternative Configuration)
+##########################################################################
+
+# You can also set these via environment variables:
+# export AIDER_MODEL=ollama/qwen2.5-coder:7b
+# export AIDER_AUTO_COMMITS=false
+# export AIDER_DARK_MODE=true
+# export AIDER_PRETTY=true
+
+##########################################################################
+# Usage Notes
+##########################################################################
+
+# With this configuration, Aider has:
+# ✅ Full file system access (no restrictions)
+# ✅ Git operations enabled
+# ✅ Auto-add files to context
+# ✅ Can modify any file in the project
+# ✅ Can execute shell commands (if enabled)
+# ✅ All features unlocked
+
+# To override any setting:
+# aider --model ollama/qwen2.5-coder:14b --auto-commits true
+
+# To use a different config file:
+# aider --config /path/to/other/.aider.conf.yml

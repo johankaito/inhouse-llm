@@ -19,8 +19,16 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.spinner import Spinner
 from rich.live import Live
+from rich.text import Text
 
 from tools import ToolRegistry, ToolResult
+
+# For ESC interrupt
+try:
+    import keyboard
+    KEYBOARD_AVAILABLE = True
+except ImportError:
+    KEYBOARD_AVAILABLE = False
 
 console = Console()
 

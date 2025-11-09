@@ -2,7 +2,7 @@
 
 > Building a self-hosted, terminal-native LLM setup equivalent to Claude Code using open source models
 
-**Status:** Phase 2 - `twin` Planning Tool Complete ✅
+**Status:** Phase 2 - `twin` with Tools Complete ✅ (Now Git-Tracked!)
 **Last Updated:** 2025-11-09
 **Confidence Level:** 98%
 
@@ -100,7 +100,7 @@ Twin reads your existing `~/.claude/` configuration:
 - Context files saved to `~/.claude/context/` with `[TWIN]` tag
 - Compatible with Claude Code learning system
 
-**Full Documentation:** `~/.llm-planner/README.md`
+**Full Documentation:** See `twin/README.md` and `docs/` folder
 
 ---
 
@@ -945,6 +945,41 @@ au CursorHold,CursorHoldI * checktime
 - Quit other applications
 - Use 7B model only
 - Restart Ollama service
+
+---
+
+## 📁 Repository Structure
+
+```
+inhouse-llm/
+├── twin/                       # Twin application code (git tracked)
+│   ├── bin/twin               # Main executable
+│   ├── lib/                   # Core libraries
+│   │   ├── tools.py          # Tool system (read, write, edit, bash, glob, grep)
+│   │   ├── session.py        # Session orchestrator
+│   │   ├── config.py         # Configuration loader
+│   │   ├── modes.py          # Mode detection
+│   │   ├── agents.py         # Agent system
+│   │   └── context.py        # Context management
+│   ├── requirements.txt      # Python dependencies
+│   ├── test_tools.py        # Tool testing
+│   └── README.md            # Twin documentation
+├── docs/                    # Project documentation
+│   ├── USAGE_GUIDE.md       # When to use twin vs Aider vs Claude
+│   ├── TWIN_COMPLETE.md     # Initial implementation
+│   ├── PHASE1_TOOLS_COMPLETE.md  # Phase 1 summary
+│   └── ...                  # Other docs
+├── .claude/
+│   └── settings.local.json  # Local permissions
+├── README.md               # This file
+└── test_example.py
+
+# Symlinks for system-wide access:
+~/.llm-planner → inhouse-llm/twin/
+~/.local/bin/twin → inhouse-llm/twin/bin/twin
+```
+
+**All twin code is now git-tracked**, including future self-improvements!
 
 ---
 

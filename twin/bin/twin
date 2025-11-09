@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""
+twin - Digital Twin Local LLM Wrapper
+Replicates Claude Code planning experience with local LLMs
+"""
+
+import sys
+import os
+from pathlib import Path
+
+# Add lib directory to path (resolve symlinks)
+script_path = Path(__file__).resolve()
+lib_path = script_path.parent.parent / "lib"
+sys.path.insert(0, str(lib_path))
+
+import click
+from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
+
+from config import ConfigLoader
+from modes import ModeDetector
+from agents import AgentLoader
+from context import ContextManager
+from session import SessionOrchestrator
+
+console = Console()
+
+
+@click.command()
+@click.option('--mode', type=click.Choice(['work', 'personal']), help='Force specific mode')
+@click.option('--agent', help='Start with specific agent')
+@click.option('--model', default='qwen2.5-coder:14b', help='Ollama model to use')
+@click.option('--no-context', is_flag=True, help='Ignore previous context')
+def main(mode, agent, model, no_context):
+    """twin - Digital Twin Local Planning Mode"""
+
+    try:
+        # Load configuration
+        config_loader = ConfigLoader()
+        config = config_loader.load_all()
+
+        # Detect mode
+        mode_detector = ModeDetector(config)
+        detected_mode = mode or mode_detector.detect(os.getcwd())
+
+        # Load agents
+        agent_loader = AgentLoader(config)
+        agents = agent_loader.load_all()
+
+        # Select agent
+        if agent:
+            selected_agent = agent_loader.get_agent(agent)
+        else:
+            selected_agent = agent_loader.get_default_for_mode(detected_mode)
+
+        # Load context
+        context_manager = ContextManager(config)
+        if not no_context:
+            context = context_manager.load_context(os.getcwd())
+        else:
+            context = None
+
+        # Display startup banner
+        display_banner(detected_mode, selected_agent, context, model)
+
+        # Start session
+        orchestrator = SessionOrchestrator(
+            config=config,
+            mode=detected_mode,
+            agent=selected_agent,
+            context=context,
+            model=model,
+            agent_loader=agent_loader,
+            mode_detector=mode_detector,
+            context_manager=context_manager
+        )
+
+        orchestrator.run()
+
+    except KeyboardInterrupt:
+        console.print("\n\n✋ [yellow]Session cancelled[/yellow]")
+        sys.exit(0)
+    except Exception as e:
+        console.print(f"\n❌ [red]Error: {e}[/red]")
+        if os.getenv('DEBUG'):
+            raise
+        sys.exit(1)
+
+
+def display_banner(mode, agent, context, model):
+    """Display startup banner"""
+    mode_emoji = "🏢" if mode == "work" else "🏠"
+    mode_color = "cyan" if mode == "work" else "green"
+
+    banner_text = f"""
+[bold]🧠 Digital Twin - Local Planning Mode[/bold]
+
+{mode_emoji} Mode: [{mode_color}]{mode.upper()}[/{mode_color}]
+🤖 Agent: [yellow]{agent['name']}[/yellow]
+🔧 Model: [dim]{model}[/dim]
+"""
+
+    if context:
+        session_count = len(context.get('sessions', []))
+        last_session = context.get('sessions', [])[-1] if context.get('sessions') else None
+        if last_session:
+            banner_text += f"\n📂 Context: [dim]Found {session_count} previous session(s)[/dim]"
+            banner_text += f"\n📅 Last: [dim]{last_session.get('timestamp', 'unknown')}[/dim]"
+    else:
+        banner_text += "\n📂 Context: [dim]Starting fresh[/dim]"
+
+    banner_text += "\n\n[dim]Type your question or /help for commands[/dim]"
+
+    console.print(Panel(banner_text, border_style=mode_color))
+
+
+if __name__ == "__main__":
+    main()

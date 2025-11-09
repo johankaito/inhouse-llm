@@ -1,0 +1,58 @@
+{
+  "version": "1.0",
+  "default_model": "fast",
+  "model_aliases": {
+    "fast": {
+      "model": "qwen2.5-coder:7b",
+      "description": "Fast responses, great for most coding tasks",
+      "speed": "15-20 tokens/sec",
+      "ram": "8-10GB"
+    },
+    "balanced": {
+      "model": "qwen2.5-coder:14b",
+      "description": "Balanced quality and speed",
+      "speed": "8-12 tokens/sec",
+      "ram": "15-18GB"
+    },
+    "quality": {
+      "model": "qwen2.5-coder:32b",
+      "description": "Highest quality code generation",
+      "speed": "4-6 tokens/sec",
+      "ram": "25-28GB"
+    },
+    "reasoning": {
+      "model": "deepseek-r1:8b",
+      "description": "Reasoning-focused for planning and decisions",
+      "speed": "10-15 tokens/sec",
+      "ram": "10-12GB"
+    }
+  },
+  "agent_model_preferences": {
+    "technical-lead": "balanced",
+    "decision-framework": "reasoning",
+    "wealth-planner": "reasoning",
+    "startup-accelerator": "reasoning",
+    "task-manager": "fast",
+    "communication-handler": "fast",
+    "learning-manager": "fast",
+    "health-coach": "fast",
+    "travel-agent": "fast",
+    "budget-tracker": "fast",
+    "disaster-recovery-architect": "balanced",
+    "repo-bootstrap-architect": "fast"
+  },
+  "mode_defaults": {
+    "work": "balanced",
+    "personal": "fast"
+  },
+  "ollama": {
+    "base_url": "http://localhost:11434",
+    "timeout": 120,
+    "context_window": 32768
+  },
+  "generation_params": {
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "stream": true
+  }
+}

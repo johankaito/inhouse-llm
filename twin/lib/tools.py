@@ -13,10 +13,16 @@ from typing import Dict, Any, List, Optional, Callable
 
 # Online resources
 try:
-    from duckduckgo_search import DDGS
+    # Try new package name first
+    from ddgs import DDGS
     DDGS_AVAILABLE = True
 except ImportError:
-    DDGS_AVAILABLE = False
+    try:
+        # Fallback to old package name
+        from duckduckgo_search import DDGS
+        DDGS_AVAILABLE = True
+    except ImportError:
+        DDGS_AVAILABLE = False
 
 try:
     import requests

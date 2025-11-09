@@ -30,7 +30,7 @@ console = Console()
 @click.command()
 @click.option('--mode', type=click.Choice(['work', 'personal']), help='Force specific mode')
 @click.option('--agent', help='Start with specific agent')
-@click.option('--model', default='qwen2.5-coder:14b', help='Ollama model to use')
+@click.option('--model', default=None, help='Ollama model or alias (fast/balanced/quality/reasoning)')
 @click.option('--no-context', is_flag=True, help='Ignore previous context')
 def main(mode, agent, model, no_context):
     """twin - Digital Twin Local Planning Mode"""
@@ -39,6 +39,42 @@ def main(mode, agent, model, no_context):
         # Load configuration
         config_loader = ConfigLoader()
         config = config_loader.load_all()
+
+        # Determine model to use (CLI arg > config default)
+        if model is None:
+            # No CLI arg, use default from config
+            twin_config = config.get('twin_config', {})
+            model_alias = twin_config.get('default_model', 'fast')
+        else:
+            model_alias = model
+
+        # Resolve alias to actual model name
+        resolved_model = config_loader.resolve_model_alias(model_alias)
+
+        # Validate model exists
+        exists, available_models = config_loader.validate_model_exists(resolved_model)
+
+        if not exists:
+            console.print(f"[yellow]⚠️  Model '{resolved_model}' not found in Ollama[/yellow]")
+            console.print(f"[yellow]Available models:[/yellow]")
+            for m in available_models:
+                console.print(f"  - {m}")
+
+            # Fallback to fast model
+            fallback_alias = 'fast'
+            fallback_model = config_loader.resolve_model_alias(fallback_alias)
+            fb_exists, _ = config_loader.validate_model_exists(fallback_model)
+
+            if fb_exists:
+                console.print(f"\n[green]✓ Falling back to '{fallback_alias}' ({fallback_model})[/green]\n")
+                resolved_model = fallback_model
+            else:
+                console.print(f"\n[red]✗ Fallback model '{fallback_model}' also not found[/red]")
+                console.print(f"[red]Run: ollama pull {fallback_model}[/red]\n")
+                sys.exit(1)
+
+        # Use validated model
+        model = resolved_model
 
         # Detect mode
         mode_detector = ModeDetector(config)

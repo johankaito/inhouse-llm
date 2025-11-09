@@ -9,6 +9,7 @@ import uuid
 import subprocess
 import re
 import json
+import time
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
@@ -63,6 +64,15 @@ class SessionOrchestrator:
         # Initialize tool registry
         self.tool_registry = ToolRegistry(config)
 
+        # Initialize session metrics
+        self.session_metrics = {
+            'queries': 0,
+            'total_time': 0.0,
+            'start_time': time.time(),
+            'responses': []
+        }
+        self.last_query_time = 0.0
+
     def run(self):
         """Run interactive session"""
         cwd = os.getcwd()
@@ -116,8 +126,13 @@ class SessionOrchestrator:
                         tool_results_text = self._format_tool_results(tool_results)
 
                         # Continue conversation with tool results
-                        followup_prompt = f"Here are the tool results:\n\n{tool_results_text}\n\nPlease continue your response based on these results."
-                        response = self._call_ollama(system_prompt, followup_prompt)
+                        # Use minimal prompt to focus on results, not old context
+                        followup_prompt = f"""The tools you requested have been executed.
+
+{tool_results_text}
+
+Based on the above tool results, provide your complete response to the user's original question."""
+                        response = self._call_ollama("", followup_prompt)
 
                         # Handle restart if needed
                         if requires_restart:
@@ -128,6 +143,11 @@ class SessionOrchestrator:
                         clean_response = re.sub(r'TOOL_CALL:.*?ARGS:.*?\}', '', response, flags=re.DOTALL)
                         console.print()
                         console.print(Markdown(clean_response))
+
+                        # Display timing
+                        if hasattr(self, 'last_query_time') and self.last_query_time > 0:
+                            console.print(f"\n[dim]⏱️  {self.last_query_time:.1f}s | {self.model}[/dim]")
+
                         console.print()
 
                         # Track conversation
@@ -370,22 +390,39 @@ OUTPUT: {result.output if result.output else result.error}
         return "\n".join(formatted)
 
     def _call_ollama(self, system_prompt: str, user_input: str) -> Optional[str]:
-        """Call Ollama API"""
+        """Call Ollama API with timing and progress indicator"""
         try:
             # Combine system prompt with user input for first message
             # Ollama doesn't have system role, so we prepend it
             full_prompt = f"{system_prompt}\n\n---\n\nUser: {user_input}\n\nAssistant:"
 
-            # Use subprocess to call ollama
-            result = subprocess.run(
-                ['ollama', 'run', self.model, full_prompt],
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
+            # Track timing
+            start_time = time.time()
+
+            # Use subprocess to call ollama with progress indicator
+            with console.status("[cyan]🤔 Thinking...", spinner="dots"):
+                result = subprocess.run(
+                    ['ollama', 'run', self.model, full_prompt],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+
+            elapsed = time.time() - start_time
 
             if result.returncode == 0:
-                return result.stdout.strip()
+                response = result.stdout.strip()
+
+                # Track metrics
+                self.session_metrics['queries'] += 1
+                self.session_metrics['total_time'] += elapsed
+                self.session_metrics['responses'].append({
+                    'duration': elapsed,
+                    'timestamp': time.time()
+                })
+                self.last_query_time = elapsed
+
+                return response
             else:
                 console.print(f"[red]Ollama error: {result.stderr}[/red]")
                 return None
@@ -432,6 +469,46 @@ OUTPUT: {result.output if result.output else result.error}
                 console.print(f"Available agents: {', '.join(self.agent_loader.agents.keys())}\n")
             return 'continue'
 
+        elif cmd == 'model':
+            if args:
+                # Import ConfigLoader to access validation methods
+                from config import ConfigLoader
+                config_loader = ConfigLoader()
+                config_loader.config = self.config  # Use already loaded config
+
+                # Resolve alias to model name
+                resolved_model = config_loader.resolve_model_alias(args)
+
+                # Validate model exists
+                exists, available_models = config_loader.validate_model_exists(resolved_model)
+
+                if exists:
+                    self.model = resolved_model
+                    self.session_data['model'] = resolved_model
+
+                    # Show model info if it was an alias
+                    model_info = config_loader.get_model_info(args)
+                    if model_info:
+                        console.print(f"\n[green]✓ Switched to {args}: {model_info.get('description', '')}[/green]")
+                        console.print(f"[dim]Model: {resolved_model}[/dim]\n")
+                    else:
+                        console.print(f"\n[green]✓ Switched to model: {resolved_model}[/green]\n")
+                else:
+                    console.print(f"\n[yellow]⚠️  Model '{resolved_model}' not found[/yellow]")
+                    console.print(f"[yellow]Available models:[/yellow]")
+                    for m in available_models:
+                        console.print(f"  - {m}")
+                    console.print(f"\n[dim]Current model unchanged: {self.model}[/dim]\n")
+            else:
+                twin_config = self.config.get('twin_config', {})
+                aliases = twin_config.get('model_aliases', {})
+                console.print(f"\n[yellow]Usage: /model <alias or model-name>[/yellow]\n")
+                console.print(f"[cyan]Model Aliases:[/cyan]")
+                for alias_name, alias_info in aliases.items():
+                    console.print(f"  [green]{alias_name:12}[/green] → {alias_info['model']:25} [dim]{alias_info.get('description', '')}[/dim]")
+                console.print(f"\n[dim]Current model: {self.model}[/dim]\n")
+            return 'continue'
+
         elif cmd == 'context':
             summary = self.context_manager.get_context_summary(os.getcwd())
             console.print(f"\n[cyan]{summary}[/cyan]\n")
@@ -468,6 +545,7 @@ OUTPUT: {result.output if result.output else result.error}
 - `/help` - Show this help message
 - `/mode work|personal` - Switch between work and personal mode
 - `/agent <name>` - Switch to a different agent
+- `/model <alias>` - Switch model (fast/balanced/quality/reasoning or full name)
 - `/context` - Show context summary
 - `/save` - Manually save session checkpoint
 - `/edit` - Transition to Aider for implementation
@@ -477,6 +555,7 @@ OUTPUT: {result.output if result.output else result.error}
 **Tips:**
 - Ask planning questions naturally
 - Agent will apply 5 Whys for major decisions
+- Switch models mid-session without restarting: `/model balanced`
 - Context is saved automatically on exit
 - Twin auto-restarts after self-improvements
 """
@@ -486,6 +565,20 @@ OUTPUT: {result.output if result.output else result.error}
         """Save session to context file"""
         cwd = os.getcwd()
         self.context_manager.append_session(cwd, self.session_data)
+
+        # Show session summary if had queries
+        if self.session_metrics['queries'] > 0:
+            total_duration = time.time() - self.session_metrics['start_time']
+            avg_response = self.session_metrics['total_time'] / self.session_metrics['queries']
+
+            console.print(f"""
+[cyan]📊 Session Summary:[/cyan]
+  Duration:     {int(total_duration//60)}m {int(total_duration%60)}s
+  Queries:      {self.session_metrics['queries']}
+  Avg response: {avg_response:.1f}s
+  Agent:        {self.agent['name']}
+  Mode:         {self.mode.upper()}
+""")
 
     def _transition_to_aider(self):
         """Transition from planning to Aider for implementation"""

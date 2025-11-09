@@ -398,7 +398,7 @@ OUTPUT: {result.output if result.output else result.error}
         return "\n".join(formatted)
 
     def _call_ollama(self, system_prompt: str, user_input: str) -> Optional[str]:
-        """Call Ollama API with timing and progress indicator"""
+        """Call Ollama with live timer, ESC interrupt, and progress indicator"""
         try:
             # Combine system prompt with user input for first message
             # Ollama doesn't have system role, so we prepend it
@@ -407,19 +407,48 @@ OUTPUT: {result.output if result.output else result.error}
             # Track timing
             start_time = time.time()
 
-            # Use subprocess to call ollama with progress indicator
-            with console.status("[cyan]🤔 Thinking...", spinner="dots"):
-                result = subprocess.run(
-                    ['ollama', 'run', self.model, full_prompt],
-                    capture_output=True,
-                    text=True,
-                    timeout=120
-                )
+            # Start subprocess (non-blocking)
+            process = subprocess.Popen(
+                ['ollama', 'run', self.model, full_prompt],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
 
+            # Live display with timer and ESC detection
+            with Live(console=console, refresh_per_second=4) as live:
+                while process.poll() is None:
+                    elapsed = int(time.time() - start_time)
+
+                    # Update display with timer
+                    display = Text()
+                    display.append("🤔 Thinking... ", style="cyan")
+                    display.append(f"{elapsed}s", style="yellow bold")
+                    if KEYBOARD_AVAILABLE:
+                        display.append(" (Press ESC to cancel)", style="dim")
+                    live.update(display)
+
+                    # Check for ESC key
+                    if KEYBOARD_AVAILABLE and keyboard.is_pressed('esc'):
+                        console.print("\n\n[yellow]⚠️  Cancelled (ESC pressed)[/yellow]\n")
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2)
+                        except:
+                            process.kill()
+                        return None
+
+                    time.sleep(0.25)
+
+            # Get output
+            stdout, stderr = process.communicate()
             elapsed = time.time() - start_time
 
-            if result.returncode == 0:
-                response = result.stdout.strip()
+            # Clear the live display
+            console.print()
+
+            if process.returncode == 0:
+                response = stdout.strip()
 
                 # Track metrics
                 self.session_metrics['queries'] += 1
@@ -432,17 +461,16 @@ OUTPUT: {result.output if result.output else result.error}
 
                 return response
             else:
-                console.print(f"[red]Ollama error: {result.stderr}[/red]")
+                console.print(f"[red]Ollama error: {stderr}[/red]")
                 return None
 
-        except subprocess.TimeoutExpired:
-            console.print("[red]Ollama request timed out[/red]")
-            return None
         except FileNotFoundError:
             console.print("[red]Ollama not found. Is it installed?[/red]")
             return None
         except Exception as e:
             console.print(f"[red]Error calling Ollama: {e}[/red]")
+            if os.getenv('DEBUG'):
+                raise
             return None
 
     def _handle_command(self, command: str) -> str:
@@ -708,3 +736,57 @@ Next Steps:
         except Exception as e:
             console.print(f"[yellow]⚠ Hot reload failed: {e}[/yellow]")
             console.print("[yellow]Please restart twin manually to use the improvements[/yellow]\n")
+
+    def _check_clipboard_for_image(self) -> Optional[str]:
+        """Check if clipboard contains an image, save to temp file"""
+        try:
+            from PIL import ImageGrab
+            import tempfile
+            
+            image = ImageGrab.grabclipboard()
+            if image:
+                # Save to temp file
+                temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False, dir='/tmp')
+                image.save(temp_file.name)
+                return temp_file.name
+        except Exception as e:
+            # Silently fail if clipboard check doesn't work
+            pass
+        return None
+
+    def _detect_image_paths(self, text: str) -> list[str]:
+        """Detect image file paths in user input"""
+        import re
+        
+        # Common image extensions
+        image_pattern = r'([^\s]+\.(?:png|jpg|jpeg|gif|bmp|webp|svg))'
+        matches = re.findall(image_pattern, text, re.IGNORECASE)
+        
+        # Verify files exist
+        valid_paths = []
+        for match in matches:
+            path = Path(match).expanduser()
+            if path.exists() and path.is_file():
+                valid_paths.append(str(path))
+        
+        return valid_paths
+
+    def _get_vision_model(self) -> Optional[str]:
+        """Get available vision model from ollama"""
+        try:
+            result = subprocess.run(
+                ['ollama', 'list'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if result.returncode == 0:
+                # Check for vision models
+                vision_models = ['llava', 'bakllava', 'llava-phi3', 'llava:7b', 'llava:13b']
+                for model in vision_models:
+                    if model in result.stdout:
+                        return model
+        except:
+            pass
+        return None

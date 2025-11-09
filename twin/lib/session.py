@@ -107,12 +107,21 @@ class SessionOrchestrator:
                         # Execute tools
                         tool_results = self._execute_tools(tool_calls)
 
+                        # Check if restart is required (self-improvement)
+                        requires_restart = any(
+                            r.metadata.get('requires_restart', False) for r in tool_results
+                        )
+
                         # Format results and send back to model
                         tool_results_text = self._format_tool_results(tool_results)
 
                         # Continue conversation with tool results
                         followup_prompt = f"Here are the tool results:\n\n{tool_results_text}\n\nPlease continue your response based on these results."
                         response = self._call_ollama(system_prompt, followup_prompt)
+
+                        # Handle restart if needed
+                        if requires_restart:
+                            self._handle_restart()
 
                     if response:
                         # Display final response (strip out any remaining tool call markers)
@@ -437,6 +446,10 @@ OUTPUT: {result.output if result.output else result.error}
             self._transition_to_aider()
             return 'continue'
 
+        elif cmd == 'reload':
+            self._reload_modules()
+            return 'continue'
+
         elif cmd in ['bye', 'exit', 'quit']:
             self._save_session()
             console.print(f"\n[green]✓ Session saved. Goodbye![/green]\n")
@@ -458,12 +471,14 @@ OUTPUT: {result.output if result.output else result.error}
 - `/context` - Show context summary
 - `/save` - Manually save session checkpoint
 - `/edit` - Transition to Aider for implementation
+- `/reload` - Reload twin modules (after manual code changes)
 - `/bye` - Save and exit session
 
 **Tips:**
 - Ask planning questions naturally
 - Agent will apply 5 Whys for major decisions
 - Context is saved automatically on exit
+- Twin auto-restarts after self-improvements
 """
         console.print(Markdown(help_text))
 
@@ -532,3 +547,63 @@ Next Steps:
             pass
 
         console.print("\n[green]Returned from Aider[/green]\n")
+
+    def _reload_modules(self):
+        """Reload twin modules to get latest code changes"""
+        import importlib
+        
+        console.print("\n[cyan]🔄 Reloading twin modules...[/cyan]\n")
+        
+        modules_to_reload = [
+            'tools',
+            'config', 
+            'modes',
+            'agents',
+            'context',
+            'self_improver'
+        ]
+        
+        reloaded = []
+        failed = []
+        
+        for module_name in modules_to_reload:
+            try:
+                if module_name in sys.modules:
+                    module = sys.modules[module_name]
+                    importlib.reload(module)
+                    reloaded.append(module_name)
+                    console.print(f"[green]✓ Reloaded {module_name}[/green]")
+            except Exception as e:
+                failed.append(f"{module_name}: {e}")
+                console.print(f"[yellow]⚠ Failed to reload {module_name}: {e}[/yellow]")
+        
+        # Reinitialize tool registry
+        if reloaded:
+            try:
+                from tools import ToolRegistry
+                self.tool_registry = ToolRegistry(self.config)
+                console.print(f"[green]✓ Tool registry reinitialized ({len(self.tool_registry.tools)} tools)[/green]")
+            except Exception as e:
+                console.print(f"[red]✗ Failed to reinitialize tools: {e}[/red]")
+        
+        console.print(f"\n[green]✅ Reload complete: {len(reloaded)} modules updated[/green]\n")
+        
+        if failed:
+            console.print(f"[yellow]⚠ {len(failed)} modules failed to reload[/yellow]\n")
+
+    def _handle_restart(self):
+        """Handle restart after self-improvement"""
+        console.print("\n[cyan]🔄 Twin improved itself! Restarting to load changes...[/cyan]")
+        console.print("[dim]Your conversation context will be preserved[/dim]\n")
+        
+        # Save current session
+        self._save_session()
+        
+        # Try hot reload first (faster, keeps context)
+        try:
+            self._reload_modules()
+            console.print("[green]✅ Changes loaded successfully![/green]\n")
+            console.print("[dim]You can continue your session normally[/dim]\n")
+        except Exception as e:
+            console.print(f"[yellow]⚠ Hot reload failed: {e}[/yellow]")
+            console.print("[yellow]Please restart twin manually to use the improvements[/yellow]\n")

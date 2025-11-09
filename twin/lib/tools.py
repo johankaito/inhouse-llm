@@ -588,7 +588,37 @@ class ToolRegistry:
                 reasoning=reasoning,
                 files=files
             )
-            return ToolResult(True, result, metadata={'auto_committed': True})
+
+            # Format output with diff
+            commit_hash = result['commit_hash']
+            diff = result['diff']
+            improvement_id = result['improvement_id']
+            files_changed = result['files_changed']
+
+            output = f"""
+✅ Improvement {improvement_id} applied and committed
+
+**Commit:** {commit_hash[:7]}
+**Files Changed:** {', '.join(files_changed)}
+
+**Changes Made:**
+```diff
+{diff}
+```
+
+See IMPROVEMENTS.md for full details.
+"""
+
+            return ToolResult(
+                True,
+                output,
+                metadata={
+                    'auto_committed': True,
+                    'requires_restart': True,
+                    'commit_hash': commit_hash,
+                    'improvement_id': improvement_id
+                }
+            )
 
         except Exception as e:
             return ToolResult(False, None, f"Self-improvement failed: {e}")

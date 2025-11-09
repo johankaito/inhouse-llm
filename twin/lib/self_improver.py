@@ -72,7 +72,7 @@ Each improvement includes:
         description: str,
         reasoning: str,
         files: Dict[str, str]
-    ) -> str:
+    ) -> Dict[str, str]:
         """Propose and apply an improvement"""
 
         if not self.can_improve():
@@ -81,11 +81,21 @@ Each improvement includes:
         timestamp = datetime.now().isoformat()
         improvement_id = datetime.now().strftime("%Y%m%d-%H%M%S")
 
+        # Capture diff before changes
+        old_contents = {}
+        for file_path in files.keys():
+            full_path = self.twin_dir / file_path
+            if full_path.exists():
+                old_contents[file_path] = full_path.read_text()
+
         # Apply file changes
         for file_path, new_content in files.items():
             full_path = self.twin_dir / file_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(new_content)
+
+        # Get git diff
+        diff = self._get_diff(list(files.keys()))
 
         # Log improvement
         self._log_improvement(improvement_id, timestamp, description, reasoning, list(files.keys()))
@@ -93,7 +103,13 @@ Each improvement includes:
         # Git commit
         commit_hash = self._commit_improvement(improvement_id, description, list(files.keys()))
 
-        return f"Improvement {improvement_id} applied and committed as {commit_hash[:7]}"
+        return {
+            'improvement_id': improvement_id,
+            'commit_hash': commit_hash,
+            'diff': diff,
+            'files_changed': list(files.keys()),
+            'description': description
+        }
 
     def _log_improvement(
         self,
@@ -166,6 +182,19 @@ See IMPROVEMENTS.md for full reasoning."""
         )
 
         return result.stdout.strip()
+
+    def _get_diff(self, files_changed: List[str]) -> str:
+        """Get git diff for changed files"""
+        try:
+            result = subprocess.run(
+                ['git', 'diff', 'HEAD'] + files_changed,
+                cwd=self.twin_dir,
+                capture_output=True,
+                text=True
+            )
+            return result.stdout
+        except Exception as e:
+            return f"Could not generate diff: {e}"
 
     def get_recent_improvements(self, count: int = 5) -> str:
         """Get recent improvements summary"""

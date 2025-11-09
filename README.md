@@ -2,9 +2,9 @@
 
 > Building a self-hosted, terminal-native LLM setup equivalent to Claude Code using open source models
 
-**Status:** Phase 1 - M1 Max Testing
-**Last Updated:** 2025-11-02
-**Confidence Level:** 96%
+**Status:** Phase 2 - `twin` Planning Tool Complete ✅
+**Last Updated:** 2025-11-09
+**Confidence Level:** 98%
 
 ---
 
@@ -43,6 +43,64 @@
 │  └─ Gaming rig (dual purpose)                   │
 └─────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🧠 NEW: `twin` - Digital Twin Planning Tool
+
+**`twin` is a unified CLI wrapper that replicates Claude Code's planning experience with local LLMs.**
+
+### Key Features
+
+- 🤖 **Agent System** - Loads specialized agents from `~/.claude/agents/` with keyword activation
+- 🏢/🏠 **Mode Detection** - Auto-detects work vs personal context (directory, git, time-based)
+- 📂 **Context Tracking** - Saves session history to `~/.claude/context/` (Claude-compatible format)
+- 🧠 **5 Whys Protocol** - Enforces structured reasoning for decisions
+- 🔄 **Aider Integration** - Seamless planning → implementation workflow
+- 📚 **Learning Integration** - Sessions contribute to Digital Twin learning loop
+
+### Quick Start
+
+```bash
+# Basic usage - auto-detects mode and agent
+twin
+
+# Planning session example
+$ twin
+🧠 Digital Twin - Local Planning Mode
+🏠 Mode: PERSONAL
+🤖 Agent: decision-framework
+📂 Context: Found 2 previous sessions
+
+>>> Help me plan the RAG implementation for Phase 4
+
+[Structured planning with 5 Whys]
+
+>>> /edit
+💾 Launching Aider with planning context...
+
+>>> /bye
+✓ Session saved
+```
+
+### Available Commands
+
+- `/help` - Show available commands
+- `/mode work|personal` - Switch modes
+- `/agent <name>` - Switch agent (technical-lead, travel-agent, etc.)
+- `/context` - Show context summary
+- `/save` - Manually save checkpoint
+- `/edit` - Transition to Aider for implementation
+- `/bye` - Save and exit
+
+### Configuration
+
+Twin reads your existing `~/.claude/` configuration:
+- Agents, modes, permissions all work automatically
+- Context files saved to `~/.claude/context/` with `[TWIN]` tag
+- Compatible with Claude Code learning system
+
+**Full Documentation:** `~/.llm-planner/README.md`
 
 ---
 

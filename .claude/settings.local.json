@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "*"
+      "*",
+      "Bash(ollama list:*)",
+      "Bash(brew services:*)",
+      "Bash(ollama run:*)",
+      "Bash(ln:*)",
+      "Bash(pip3 install:*)",
+      "Bash(twin --help:*)",
+      "Bash(timeout 2 twin:*)",
+      "Bash(twin --no-context:*)"
     ]
   }
 }

@@ -6,3 +6,6 @@ requests>=2.31
 beautifulsoup4>=4.12
 html2text>=2020.1.16
 PyGithub>=2.1
+keyboard>=0.13
+pillow>=10.0
+pyperclip>=1.8

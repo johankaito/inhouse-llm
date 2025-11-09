@@ -11,6 +11,7 @@ import re
 import json
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from rich.console import Console
@@ -114,8 +115,41 @@ class SessionOrchestrator:
                 # Track conversation
                 self.session_data['planning_discussion'] += f"\n{user_input}\n"
 
+                # Check for images (clipboard or paths)
+                image_paths = []
+
+                # Check clipboard first
+                clipboard_image = self._check_clipboard_for_image()
+                if clipboard_image:
+                    console.print(f"[green]📸 Image detected in clipboard → {clipboard_image}[/green]")
+                    image_paths.append(clipboard_image)
+
+                # Check for image paths in text
+                text_images = self._detect_image_paths(user_input)
+                if text_images:
+                    for img_path in text_images:
+                        console.print(f"[green]📸 Image detected: {img_path}[/green]")
+                        image_paths.append(img_path)
+
+                # If images detected, check for vision model
+                if image_paths:
+                    vision_model = self._get_vision_model()
+                    if vision_model:
+                        console.print(f"[cyan]🔄 Switching to {vision_model} for vision support[/cyan]\n")
+                        # Temporarily use vision model
+                        original_model = self.model
+                        self.model = vision_model
+                        # Add images to input (Ollama vision format)
+                        user_input = f"{user_input}\n\nImages to analyze: {', '.join(image_paths)}"
+                    else:
+                        console.print(f"[yellow]⚠️  No vision model found. Install with: ollama pull llava:7b[/yellow]\n")
+
                 # Call Ollama
                 response = self._call_ollama(system_prompt, user_input)
+
+                # Restore original model if we switched
+                if image_paths and vision_model:
+                    self.model = original_model
 
                 if response:
                     # Check for tool calls in response

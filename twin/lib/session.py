@@ -178,6 +178,51 @@ For non-trivial recommendations, you MUST provide:
         # Add tool descriptions
         prompt_parts.append(self._get_tool_instructions())
 
+        # Add self-improvement capability
+        if hasattr(self.tool_registry, 'self_improver'):
+            prompt_parts.append("""
+## Self-Improvement Capability
+
+You can improve your own code when you identify:
+- Bugs in your implementation
+- Performance optimizations
+- Missing features that would be useful
+- Better error handling
+- Code quality improvements
+
+Use the improve_self() tool:
+
+```
+TOOL_CALL: improve_self
+ARGS: {
+  "description": "Brief description of improvement",
+  "reasoning": "5 Whys analysis:\\n1. Why L1: ...\\n2. Why L2: ...\\n3. Why L3: ...\\n4. Why L4: ...\\n5. Why L5: ...",
+  "files": {
+    "lib/session.py": "<complete new file content>",
+    "lib/tools.py": "<complete new file content>"
+  }
+}
+```
+
+The improvement will be:
+1. Automatically applied to your code
+2. Logged in IMPROVEMENTS.md
+3. Committed to git with [SELF-IMPROVEMENT] tag
+4. Available immediately
+
+**Be thoughtful:**
+- Only improve when there's clear value
+- Apply 5 Whys to justify the change
+- Test mentally before applying
+- Include complete file contents (not diffs)
+
+**When to self-improve:**
+- User reports a bug → Fix it immediately
+- You encounter an error in your own code → Fix it
+- You realize a feature is missing → Add it
+- You find inefficient code → Optimize it
+""")
+
         # Add context if available
         if self.context:
             recent_sessions = self.context_manager.get_recent_sessions(os.getcwd(), count=2)

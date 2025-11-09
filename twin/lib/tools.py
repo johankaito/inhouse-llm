@@ -1,6 +1,7 @@
 """
 Tool system for twin
 Implements core tools: Read, Write, Edit, Bash, Glob, Grep
+Plus online resources: web_search, web_fetch, GitHub API
 """
 
 import os
@@ -9,6 +10,34 @@ import subprocess
 import glob as glob_module
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable
+
+# Online resources
+try:
+    from duckduckgo_search import DDGS
+    DDGS_AVAILABLE = True
+except ImportError:
+    DDGS_AVAILABLE = False
+
+try:
+    import requests
+    from bs4 import BeautifulSoup
+    import html2text
+    WEB_FETCH_AVAILABLE = True
+except ImportError:
+    WEB_FETCH_AVAILABLE = False
+
+try:
+    from github import Github
+    GITHUB_AVAILABLE = True
+except ImportError:
+    GITHUB_AVAILABLE = False
+
+# Self-improvement
+try:
+    from self_improver import SelfImprover
+    SELF_IMPROVEMENT_AVAILABLE = True
+except ImportError:
+    SELF_IMPROVEMENT_AVAILABLE = False
 
 
 class ToolResult:
@@ -46,6 +75,9 @@ class ToolRegistry:
         self.tools = {}
         self.config = config or {}
         self._register_core_tools()
+        self._register_online_tools()
+        self._register_github_tools()
+        self._register_self_improvement_tool()
 
     def register(self, tool: Tool):
         """Register a tool"""
@@ -358,3 +390,205 @@ class ToolRegistry:
 
         path_str = str(path)
         return any(pattern in path_str for pattern in ignore_patterns)
+
+    # Online resource tools
+
+    def _register_online_tools(self):
+        """Register online resource tools (web search, fetch)"""
+        if DDGS_AVAILABLE:
+            self.register(Tool(
+                name="web_search",
+                description="Search the web for current information using DuckDuckGo. Returns top results with titles, summaries, and URLs.",
+                execute_fn=self._web_search,
+                args_schema={"query": "string", "max_results": "int (optional, default 5)"}
+            ))
+
+        if WEB_FETCH_AVAILABLE:
+            self.register(Tool(
+                name="web_fetch",
+                description="Fetch and read content from a URL. Converts HTML to readable markdown format.",
+                execute_fn=self._web_fetch,
+                args_schema={"url": "string"}
+            ))
+
+    def _web_search(self, query: str, max_results: int = 5) -> ToolResult:
+        """Search the web with DuckDuckGo"""
+        try:
+            ddgs = DDGS()
+            results = list(ddgs.text(query, max_results=max_results))
+
+            if not results:
+                return ToolResult(True, "No results found", metadata={'count': 0, 'query': query})
+
+            formatted = []
+            for i, result in enumerate(results, 1):
+                formatted.append(f"{i}. **{result.get('title', 'No title')}**")
+                formatted.append(f"   {result.get('body', 'No description')}")
+                formatted.append(f"   URL: {result.get('href', 'No URL')}\n")
+
+            output = "\n".join(formatted)
+            metadata = {'count': len(results), 'query': query}
+
+            return ToolResult(True, output, metadata=metadata)
+
+        except Exception as e:
+            return ToolResult(False, None, f"Web search failed: {e}")
+
+    def _web_fetch(self, url: str) -> ToolResult:
+        """Fetch and convert URL to readable text"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+
+            content_type = response.headers.get('content-type', '')
+
+            if 'text/html' in content_type:
+                # Convert HTML to markdown
+                soup = BeautifulSoup(response.content, 'html.parser')
+
+                # Remove script and style elements
+                for script in soup(["script", "style", "nav", "footer", "header"]):
+                    script.decompose()
+
+                h = html2text.HTML2Text()
+                h.ignore_links = False
+                h.body_width = 0
+                markdown = h.handle(str(soup))
+
+                # Truncate if too long
+                if len(markdown) > 10000:
+                    markdown = markdown[:10000] + "\n\n[Content truncated - too long]"
+
+                return ToolResult(True, markdown, metadata={'url': url, 'length': len(markdown)})
+            else:
+                # Return raw text
+                text = response.text[:10000]
+                return ToolResult(True, text, metadata={'url': url, 'content_type': content_type})
+
+        except Exception as e:
+            return ToolResult(False, None, f"Failed to fetch URL: {e}")
+
+    def _register_github_tools(self):
+        """Register GitHub API tools"""
+        if not GITHUB_AVAILABLE:
+            return
+
+        github_token = os.getenv('GITHUB_TOKEN')
+        if not github_token:
+            return  # Skip if no token
+
+        try:
+            self.gh = Github(github_token)
+
+            self.register(Tool(
+                name="gh_search_code",
+                description="Search GitHub code repositories. Requires GITHUB_TOKEN environment variable.",
+                execute_fn=self._gh_search_code,
+                args_schema={"query": "string", "repo": "string (optional, e.g., 'owner/repo')"}
+            ))
+
+            self.register(Tool(
+                name="gh_get_pr",
+                description="Get GitHub pull request details. Requires GITHUB_TOKEN environment variable.",
+                execute_fn=self._gh_get_pr,
+                args_schema={"repo": "string (e.g., 'owner/repo')", "pr_number": "int"}
+            ))
+        except Exception as e:
+            # Silently skip if GitHub setup fails
+            pass
+
+    def _gh_search_code(self, query: str, repo: str = None) -> ToolResult:
+        """Search GitHub code"""
+        try:
+            if not hasattr(self, 'gh'):
+                return ToolResult(False, None, "GitHub not configured (missing GITHUB_TOKEN)")
+
+            if repo:
+                results = self.gh.search_code(f"{query} repo:{repo}")
+            else:
+                results = self.gh.search_code(query)
+
+            formatted = []
+            count = 0
+            for result in results[:10]:  # Limit to 10 results
+                formatted.append(f"{count + 1}. {result.repository.full_name}/{result.path}")
+                formatted.append(f"   {result.html_url}\n")
+                count += 1
+
+            if not formatted:
+                return ToolResult(True, "No results found", metadata={'count': 0})
+
+            return ToolResult(True, "\n".join(formatted), metadata={'count': count, 'query': query})
+
+        except Exception as e:
+            return ToolResult(False, None, f"GitHub search failed: {e}")
+
+    def _gh_get_pr(self, repo: str, pr_number: int) -> ToolResult:
+        """Get GitHub PR details"""
+        try:
+            if not hasattr(self, 'gh'):
+                return ToolResult(False, None, "GitHub not configured (missing GITHUB_TOKEN)")
+
+            repo_obj = self.gh.get_repo(repo)
+            pr = repo_obj.get_pull(pr_number)
+
+            output = f"""# PR #{pr.number}: {pr.title}
+
+**Status:** {pr.state}
+**Author:** {pr.user.login}
+**Created:** {pr.created_at}
+
+## Description
+{pr.body or 'No description'}
+
+## Stats
+- Files Changed: {pr.changed_files}
+- Commits: {pr.commits}
+- Comments: {pr.comments}
+- Additions: +{pr.additions}
+- Deletions: -{pr.deletions}
+"""
+            return ToolResult(True, output, metadata={'pr_number': pr_number, 'repo': repo})
+
+        except Exception as e:
+            return ToolResult(False, None, f"Failed to get PR: {e}")
+
+    # Self-improvement tools
+
+    def _register_self_improvement_tool(self):
+        """Register self-improvement tool"""
+        if not SELF_IMPROVEMENT_AVAILABLE:
+            return
+
+        twin_dir = Path(__file__).parent.parent
+        self.self_improver = SelfImprover(twin_dir)
+
+        self.register(Tool(
+            name="improve_self",
+            description="Improve twin's own code. Automatically commits changes to git with [SELF-IMPROVEMENT] tag. Use when you identify bugs, optimizations, or missing features in twin itself.",
+            execute_fn=self._improve_self,
+            args_schema={
+                "description": "string (brief description of improvement)",
+                "reasoning": "string (5 Whys analysis explaining why this improvement is needed)",
+                "files": "dict (file_path: new_content pairs, relative to twin/ directory)"
+            }
+        ))
+
+    def _improve_self(self, description: str, reasoning: str, files: Dict[str, str]) -> ToolResult:
+        """Improve twin's own code"""
+        try:
+            if not hasattr(self, 'self_improver'):
+                return ToolResult(False, None, "Self-improvement not available")
+
+            result = self.self_improver.propose_improvement(
+                description=description,
+                reasoning=reasoning,
+                files=files
+            )
+            return ToolResult(True, result, metadata={'auto_committed': True})
+
+        except Exception as e:
+            return ToolResult(False, None, f"Self-improvement failed: {e}")

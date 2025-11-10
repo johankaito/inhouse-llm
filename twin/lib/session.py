@@ -23,6 +23,7 @@ from rich.live import Live
 from rich.text import Text
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 
 from tools import ToolRegistry, ToolResult
 
@@ -120,13 +121,25 @@ class SessionOrchestrator:
         }
         self.last_query_time = 0.0
 
-        # Initialize prompt session for single-line input
-        # Use /multiline command for multiline input
-        self.prompt_session = PromptSession(
-            multiline=False,
+        # Initialize prompt session with multiline by default
+        self.prompt_session = self._create_prompt_session()
+
+    def _create_prompt_session(self) -> PromptSession:
+        """Create prompt session with multiline input (Alt+Enter or Ctrl+D to submit)"""
+        kb = KeyBindings()
+
+        @kb.add('escape', 'enter')  # Alt+Enter (Option+Enter on Mac) to submit
+        def _(event):
+            """Submit on Alt+Enter"""
+            event.current_buffer.validate_and_handle()
+
+        return PromptSession(
+            multiline=True,
+            key_bindings=kb,
             complete_while_typing=False,
             enable_history_search=False,
-            mouse_support=False
+            mouse_support=False,
+            prompt_continuation='... '  # Show continuation on new lines
         )
 
     def run(self):
@@ -684,9 +697,9 @@ OUTPUT: {result.output if result.output else result.error}
 - `/bye` - Save and exit session
 
 **Tips:**
-- Press **Enter** to submit your message
-- Use `/multiline` for multiline input (Enter twice to submit)
-  _(Shift+Enter not supported - terminal limitation)_
+- **Multiline input by default:** Press Enter to add new lines
+- **Press Alt+Enter (Option+Enter on Mac) or Ctrl+D to submit**
+- Use `/multiline` for numbered-line mode if preferred
 - Ask planning questions naturally
 - Agent will apply 5 Whys for major decisions
 - Switch models mid-session without restarting: `/model balanced`

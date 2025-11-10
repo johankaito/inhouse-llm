@@ -56,6 +56,9 @@ $ twin
 📂 Context: Found 2 previous sessions
 
 >>> Help me plan the RAG implementation for Phase 4
+... I want to use vector embeddings for semantic search
+... and need to handle 100k+ documents
+... (Press Alt+Enter or Ctrl+D to submit)
 
 [Agent provides structured planning with 5 Whys]
 
@@ -105,9 +108,10 @@ Which files do you want to edit? src/rag/indexer.py src/rag/query.py
 - `/bye` - Save and exit
 
 **Input Tips:**
-- **Enter** - Submit message
-- `/multiline` - Enter multiline mode with line numbers (press Enter twice to submit)
-  _(Note: Shift+Enter not supported due to terminal limitations)_
+- **Multiline by default:** Press Enter to add new lines as you type
+- **Alt+Enter** (Option+Enter on Mac) or **Ctrl+D** - Submit your message
+- `/multiline` - Alternative numbered-line mode (press Enter twice to submit)
+  _(Note: Shift+Enter not supported - terminal limitation)_
 
 ## Configuration
 

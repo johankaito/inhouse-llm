@@ -56,6 +56,7 @@ $ twin
 📂 Context: Found 2 previous sessions
 
 >>> Help me plan the RAG implementation for Phase 4
+    (Shift+Enter for new line, Enter to submit)
 
 [Agent provides structured planning with 5 Whys]
 
@@ -97,10 +98,17 @@ Which files do you want to edit? src/rag/indexer.py src/rag/query.py
 - `/help` - Show help message
 - `/mode work|personal` - Switch modes
 - `/agent <name>` - Switch agent
+- `/model <alias>` - Switch model (fast/balanced/quality/reasoning)
 - `/context` - Show context summary
 - `/save` - Manually save checkpoint
 - `/edit` - Transition to Aider
+- `/reload` - Reload twin modules after code changes
 - `/bye` - Save and exit
+
+**Input Tips:**
+- **Shift+Enter** - Insert new line (for multiline input)
+- **Enter** - Submit message
+- `/multiline` - Alternative multiline mode (Enter twice to submit)
 
 ## Configuration
 

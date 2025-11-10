@@ -1,5 +1,6 @@
 click>=8.0.0
 rich>=13.0.0
+prompt_toolkit>=3.0.0
 pyyaml>=6.0
 ddgs>=1.0
 requests>=2.31

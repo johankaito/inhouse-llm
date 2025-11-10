@@ -22,14 +22,53 @@ from rich.spinner import Spinner
 from rich.live import Live
 from rich.text import Text
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
+
 from tools import ToolRegistry, ToolResult
 
-# For ESC interrupt
+# For ESC interrupt - using pynput instead of keyboard (works on macOS without permissions)
 try:
-    import keyboard
+    from pynput import keyboard as pynput_keyboard
     KEYBOARD_AVAILABLE = True
+
+    # Global flag for ESC press
+    _esc_pressed = False
+    _keyboard_listener = None
+
+    def _on_press(key):
+        global _esc_pressed
+        try:
+            if key == pynput_keyboard.Key.esc:
+                _esc_pressed = True
+        except AttributeError:
+            pass
+
+    def _start_keyboard_listener():
+        global _keyboard_listener
+        if _keyboard_listener is None or not _keyboard_listener.is_alive():
+            _keyboard_listener = pynput_keyboard.Listener(on_press=_on_press)
+            _keyboard_listener.daemon = True
+            _keyboard_listener.start()
+
+    def _reset_esc_flag():
+        global _esc_pressed
+        _esc_pressed = False
+
+    def _is_esc_pressed():
+        return _esc_pressed
+
 except ImportError:
     KEYBOARD_AVAILABLE = False
+
+    def _start_keyboard_listener():
+        pass
+
+    def _reset_esc_flag():
+        pass
+
+    def _is_esc_pressed():
+        return False
 
 console = Console()
 
@@ -82,6 +121,30 @@ class SessionOrchestrator:
         }
         self.last_query_time = 0.0
 
+        # Initialize prompt session with Shift+Enter support
+        self.prompt_session = self._create_prompt_session()
+
+    def _create_prompt_session(self) -> PromptSession:
+        """Create prompt_toolkit session with Shift+Enter for newlines"""
+        # Key bindings: Shift+Enter = newline, Enter = submit
+        kb = KeyBindings()
+
+        @kb.add('enter', eager=True)
+        def _(event):
+            """Submit on Enter"""
+            event.current_buffer.validate_and_handle()
+
+        @kb.add('s-enter')  # Shift+Enter
+        def _(event):
+            """Insert newline on Shift+Enter"""
+            event.current_buffer.insert_text('\n')
+
+        return PromptSession(
+            multiline=True,
+            key_bindings=kb,
+            complete_while_typing=False
+        )
+
     def run(self):
         """Run interactive session"""
         cwd = os.getcwd()
@@ -97,11 +160,18 @@ class SessionOrchestrator:
         # Main loop
         while True:
             try:
-                # Get user input
-                user_input = Prompt.ask("\n[bold cyan]>>>[/bold cyan]", console=console)
+                # Get user input with Shift+Enter support
+                console.print("\n[bold cyan]>>>[/bold cyan] ", end="")
+                user_input = self.prompt_session.prompt()
 
                 if not user_input.strip():
                     continue
+
+                # Check for multiline mode
+                if user_input.strip() == '/multiline':
+                    user_input = self._get_multiline_input()
+                    if not user_input:
+                        continue
 
                 # Handle commands
                 if user_input.startswith('/'):
@@ -434,6 +504,11 @@ OUTPUT: {result.output if result.output else result.error}
     def _call_ollama(self, system_prompt: str, user_input: str) -> Optional[str]:
         """Call Ollama with live timer, ESC interrupt, and progress indicator"""
         try:
+            # Start keyboard listener and reset ESC flag
+            if KEYBOARD_AVAILABLE:
+                _start_keyboard_listener()
+                _reset_esc_flag()
+
             # Combine system prompt with user input for first message
             # Ollama doesn't have system role, so we prepend it
             full_prompt = f"{system_prompt}\n\n---\n\nUser: {user_input}\n\nAssistant:"
@@ -463,13 +538,14 @@ OUTPUT: {result.output if result.output else result.error}
                     live.update(display)
 
                     # Check for ESC key
-                    if KEYBOARD_AVAILABLE and keyboard.is_pressed('esc'):
+                    if KEYBOARD_AVAILABLE and _is_esc_pressed():
                         console.print("\n\n[yellow]⚠️  Cancelled (ESC pressed)[/yellow]\n")
                         process.terminate()
                         try:
                             process.wait(timeout=2)
                         except:
                             process.kill()
+                        _reset_esc_flag()  # Reset for next time
                         return None
 
                     time.sleep(0.25)
@@ -613,6 +689,7 @@ OUTPUT: {result.output if result.output else result.error}
 **Available Commands:**
 
 - `/help` - Show this help message
+- `/multiline` - Enter multiline mode (press Enter twice to submit)
 - `/mode work|personal` - Switch between work and personal mode
 - `/agent <name>` - Switch to a different agent
 - `/model <alias>` - Switch model (fast/balanced/quality/reasoning or full name)
@@ -623,6 +700,8 @@ OUTPUT: {result.output if result.output else result.error}
 - `/bye` - Save and exit session
 
 **Tips:**
+- **Press Shift+Enter to insert a new line** (no need for /multiline!)
+- Press Enter alone to submit your message
 - Ask planning questions naturally
 - Agent will apply 5 Whys for major decisions
 - Switch models mid-session without restarting: `/model balanced`
@@ -771,12 +850,71 @@ Next Steps:
             console.print(f"[yellow]⚠ Hot reload failed: {e}[/yellow]")
             console.print("[yellow]Please restart twin manually to use the improvements[/yellow]\n")
 
+    def _get_multiline_input(self) -> str:
+        """Get multiline input from user. Enter blank line to submit."""
+        console.print("\n[cyan]📝 Multiline mode:[/cyan] [dim]Enter your text. Press Enter twice (blank line) to submit.[/dim]")
+
+        if KEYBOARD_AVAILABLE:
+            console.print("[dim]Press [bold]ESC[/bold] or type [bold]/cancel[/bold] to cancel.[/dim]\n")
+            # Start keyboard listener and reset ESC flag
+            _start_keyboard_listener()
+            _reset_esc_flag()
+        else:
+            console.print("[dim]Type [bold]/cancel[/bold] on a line by itself to cancel.[/dim]\n")
+
+        lines = []
+        line_num = 1
+
+        while True:
+            try:
+                # Check for ESC press before prompting
+                if KEYBOARD_AVAILABLE and _is_esc_pressed():
+                    console.print("[yellow]Cancelled (ESC pressed)[/yellow]\n")
+                    _reset_esc_flag()
+                    return ""
+
+                # Show line number prompt
+                line = Prompt.ask(f"[dim]{line_num:2d}|[/dim]", console=console, default="")
+
+                # Check for ESC press after input (in case pressed during typing)
+                if KEYBOARD_AVAILABLE and _is_esc_pressed():
+                    console.print("[yellow]Cancelled (ESC pressed)[/yellow]\n")
+                    _reset_esc_flag()
+                    return ""
+
+                # Check for /cancel command
+                if line.strip() == '/cancel':
+                    console.print("[yellow]Cancelled[/yellow]\n")
+                    return ""
+
+                # Empty line = submit
+                if not line.strip() and lines:  # Need at least one line of content
+                    break
+
+                if line.strip():  # Only add non-empty lines
+                    lines.append(line)
+                    line_num += 1
+                elif lines:  # Empty line after content = submit
+                    break
+
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[yellow]Cancelled[/yellow]\n")
+                if KEYBOARD_AVAILABLE:
+                    _reset_esc_flag()
+                return ""
+
+        result = "\n".join(lines)
+        console.print(f"\n[green]✓ Captured {len(lines)} lines ({len(result)} chars)[/green]\n")
+        if KEYBOARD_AVAILABLE:
+            _reset_esc_flag()
+        return result
+
     def _check_clipboard_for_image(self) -> Optional[str]:
         """Check if clipboard contains an image, save to temp file"""
         try:
             from PIL import ImageGrab
             import tempfile
-            
+
             image = ImageGrab.grabclipboard()
             if image:
                 # Save to temp file

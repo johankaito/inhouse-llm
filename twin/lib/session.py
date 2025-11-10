@@ -23,7 +23,6 @@ from rich.live import Live
 from rich.text import Text
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings
 
 from tools import ToolRegistry, ToolResult
 

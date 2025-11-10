@@ -144,7 +144,9 @@ class SessionOrchestrator:
         return PromptSession(
             multiline=True,
             key_bindings=kb,
-            complete_while_typing=False
+            complete_while_typing=False,
+            enable_history_search=False,
+            mouse_support=False
         )
 
     def run(self):
@@ -162,9 +164,9 @@ class SessionOrchestrator:
         # Main loop
         while True:
             try:
-                # Get user input with Shift+Enter support
-                console.print("\n[bold cyan]>>>[/bold cyan] ", end="")
-                user_input = self.prompt_session.prompt()
+                # Get user input with Alt+Enter support
+                console.print()  # Add newline before prompt
+                user_input = self.prompt_session.prompt(">>> ")
 
                 if not user_input.strip():
                     continue

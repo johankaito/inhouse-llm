@@ -24,6 +24,7 @@ from rich.text import Text
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 
 from tools import ToolRegistry, ToolResult
 
@@ -125,18 +126,19 @@ class SessionOrchestrator:
         self.prompt_session = self._create_prompt_session()
 
     def _create_prompt_session(self) -> PromptSession:
-        """Create prompt_toolkit session with Shift+Enter for newlines"""
-        # Key bindings: Shift+Enter = newline, Enter = submit
+        """Create prompt_toolkit session with Alt+Enter for newlines"""
+        # Terminal limitation: Shift+Enter not distinguishable from Enter
+        # Solution: Alt/Option+Enter for newline (like Jupyter), Enter to submit
         kb = KeyBindings()
 
-        @kb.add('enter', eager=True)
+        @kb.add('escape', 'enter')  # Alt/Option+Enter inserts newline
         def _(event):
-            """Submit on Enter"""
-            event.current_buffer.validate_and_handle()
+            """Insert newline on Alt+Enter (Option+Enter on Mac)"""
+            event.current_buffer.insert_text('\n')
 
-        @kb.add('s-enter')  # Shift+Enter
+        @kb.add(Keys.ControlJ)  # Ctrl+J also inserts newline (alternative)
         def _(event):
-            """Insert newline on Shift+Enter"""
+            """Insert newline on Ctrl+J"""
             event.current_buffer.insert_text('\n')
 
         return PromptSession(
@@ -700,8 +702,9 @@ OUTPUT: {result.output if result.output else result.error}
 - `/bye` - Save and exit session
 
 **Tips:**
-- **Press Shift+Enter to insert a new line** (no need for /multiline!)
+- **Press Alt+Enter (Option+Enter on Mac) or Ctrl+J to insert a new line**
 - Press Enter alone to submit your message
+- Use `/multiline` for line-numbered multiline mode (Enter twice to submit)
 - Ask planning questions naturally
 - Agent will apply 5 Whys for major decisions
 - Switch models mid-session without restarting: `/model balanced`

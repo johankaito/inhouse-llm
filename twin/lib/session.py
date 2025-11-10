@@ -125,17 +125,11 @@ class SessionOrchestrator:
         self.prompt_session = self._create_prompt_session()
 
     def _create_prompt_session(self) -> PromptSession:
-        """Create prompt session with multiline input (Alt+Enter or Ctrl+D to submit)"""
-        kb = KeyBindings()
-
-        @kb.add('escape', 'enter')  # Alt+Enter (Option+Enter on Mac) to submit
-        def _(event):
-            """Submit on Alt+Enter"""
-            event.current_buffer.validate_and_handle()
-
+        """Create prompt session with multiline input (Ctrl+D to submit)"""
+        # Note: Option+Enter and Alt+Enter are difficult to bind reliably across terminals
+        # Ctrl+D is the universal "end of input" signal and works everywhere
         return PromptSession(
             multiline=True,
-            key_bindings=kb,
             complete_while_typing=False,
             enable_history_search=False,
             mouse_support=False,
@@ -698,8 +692,8 @@ OUTPUT: {result.output if result.output else result.error}
 
 **Tips:**
 - **Multiline input by default:** Press Enter to add new lines
-- **Press Alt+Enter (Option+Enter on Mac) or Ctrl+D to submit**
-- Use `/multiline` for numbered-line mode if preferred
+- **Press Ctrl+D to submit** (universal end-of-input signal)
+- Use `/multiline` for numbered-line mode (Enter twice to submit)
 - Ask planning questions naturally
 - Agent will apply 5 Whys for major decisions
 - Switch models mid-session without restarting: `/model balanced`

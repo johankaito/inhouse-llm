@@ -56,7 +56,6 @@ $ twin
 📂 Context: Found 2 previous sessions
 
 >>> Help me plan the RAG implementation for Phase 4
-    (Alt+Enter or Ctrl+J for new line, Enter to submit)
 
 [Agent provides structured planning with 5 Whys]
 
@@ -106,10 +105,9 @@ Which files do you want to edit? src/rag/indexer.py src/rag/query.py
 - `/bye` - Save and exit
 
 **Input Tips:**
-- **Alt+Enter** (Option+Enter on Mac) or **Ctrl+J** - Insert new line
-  _(Note: Shift+Enter isn't detectable in most terminals)_
 - **Enter** - Submit message
-- `/multiline` - Alternative multiline mode with line numbers (Enter twice to submit)
+- `/multiline` - Enter multiline mode with line numbers (press Enter twice to submit)
+  _(Note: Shift+Enter not supported due to terminal limitations)_
 
 ## Configuration
 

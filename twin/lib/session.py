@@ -23,8 +23,6 @@ from rich.live import Live
 from rich.text import Text
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.keys import Keys
 
 from tools import ToolRegistry, ToolResult
 
@@ -122,28 +120,10 @@ class SessionOrchestrator:
         }
         self.last_query_time = 0.0
 
-        # Initialize prompt session with Shift+Enter support
-        self.prompt_session = self._create_prompt_session()
-
-    def _create_prompt_session(self) -> PromptSession:
-        """Create prompt_toolkit session with Alt+Enter for newlines"""
-        # Terminal limitation: Shift+Enter not distinguishable from Enter
-        # Solution: Alt/Option+Enter for newline (like Jupyter), Enter to submit
-        kb = KeyBindings()
-
-        @kb.add('escape', 'enter')  # Alt/Option+Enter inserts newline
-        def _(event):
-            """Insert newline on Alt+Enter (Option+Enter on Mac)"""
-            event.current_buffer.insert_text('\n')
-
-        @kb.add(Keys.ControlJ)  # Ctrl+J also inserts newline (alternative)
-        def _(event):
-            """Insert newline on Ctrl+J"""
-            event.current_buffer.insert_text('\n')
-
-        return PromptSession(
-            multiline=True,
-            key_bindings=kb,
+        # Initialize prompt session for single-line input
+        # Use /multiline command for multiline input
+        self.prompt_session = PromptSession(
+            multiline=False,
             complete_while_typing=False,
             enable_history_search=False,
             mouse_support=False
@@ -704,9 +684,9 @@ OUTPUT: {result.output if result.output else result.error}
 - `/bye` - Save and exit session
 
 **Tips:**
-- **Press Alt+Enter (Option+Enter on Mac) or Ctrl+J to insert a new line**
-- Press Enter alone to submit your message
-- Use `/multiline` for line-numbered multiline mode (Enter twice to submit)
+- Press **Enter** to submit your message
+- Use `/multiline` for multiline input (Enter twice to submit)
+  _(Shift+Enter not supported - terminal limitation)_
 - Ask planning questions naturally
 - Agent will apply 5 Whys for major decisions
 - Switch models mid-session without restarting: `/model balanced`

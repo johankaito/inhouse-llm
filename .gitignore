@@ -1,3 +1,7 @@
 .aider*
 __pycache__/
 *.pyc
+jina-rapid/cache/
+jina-rapid/__pycache__/
+jina-rapid/*.pyc
+jina-rapid/.venv/

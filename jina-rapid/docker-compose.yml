@@ -1,0 +1,10 @@
+version: "3.9"
+
+services:
+  jina-rapid:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - MAX_CONTENT_LENGTH=30000
+    restart: unless-stopped

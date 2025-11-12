@@ -10,6 +10,7 @@ import subprocess
 import glob as glob_module
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable
+from urllib.parse import quote_plus
 
 # Online resources
 try:
@@ -117,7 +118,7 @@ class ToolRegistry:
         # File operations
         self.register(Tool(
             name="read",
-            description="Read file contents. Returns file content with line numbers.",
+            description="Read file contents or list directory. Returns file content with line numbers (truncated at 2000 lines by default). If path is a directory, returns formatted listing with file types, sizes, symlinks, and hidden files. Automatically detects binary files, handles multiple encodings (UTF-8, latin-1, cp1252), and provides rich metadata for complexity analysis.",
             execute_fn=self._read_file,
             args_schema={"file_path": "string", "offset": "int (optional)", "limit": "int (optional)"}
         ))
@@ -162,21 +163,166 @@ class ToolRegistry:
     # Tool implementations
 
     def _read_file(self, file_path: str, offset: int = 0, limit: int = None) -> ToolResult:
-        """Read file with optional line range"""
+        """Read file with optional line range, or list directory contents if path is a directory"""
         try:
             path = Path(file_path).expanduser()
 
             if not path.exists():
-                return ToolResult(False, None, f"File not found: {file_path}")
+                error_msg = f"File not found: {file_path}\n"
+                error_msg += "\nSuggestions:\n"
+                error_msg += "• Check the path for typos\n"
+                error_msg += "• Use 'glob' tool to search for similar filenames\n"
+                error_msg += f"• Verify the file exists in: {path.parent}"
+                return ToolResult(False, None, error_msg)
+
+            # If it's a directory, list its contents
+            if path.is_dir():
+                try:
+                    entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+
+                    MAX_ENTRIES = 100
+                    total_entries = len(entries)
+                    truncated = total_entries > MAX_ENTRIES
+
+                    # Limit entries if too many
+                    display_entries = entries[:MAX_ENTRIES] if truncated else entries
+
+                    lines = []
+                    dir_count = 0
+                    file_count = 0
+                    symlink_count = 0
+                    broken_symlink_count = 0
+                    hidden_count = 0
+                    total_size = 0
+
+                    for entry in display_entries:
+                        is_hidden = entry.name.startswith('.')
+
+                        # Check if it's a symlink
+                        if entry.is_symlink():
+                            try:
+                                target = entry.readlink()
+                                # Check if broken
+                                if entry.exists():
+                                    prefix = "👻📎" if is_hidden else "📎"
+                                    lines.append(f"{prefix} {entry.name} → {target}")
+                                else:
+                                    prefix = "👻🔗" if is_hidden else "🔗"
+                                    lines.append(f"{prefix} {entry.name} → {target} [BROKEN]")
+                                    broken_symlink_count += 1
+                                symlink_count += 1
+                            except Exception:
+                                prefix = "👻🔗" if is_hidden else "🔗"
+                                lines.append(f"{prefix} {entry.name} [SYMLINK - cannot read target]")
+                                symlink_count += 1
+                        elif entry.is_dir():
+                            prefix = "👻📁" if is_hidden else "📁"
+                            lines.append(f"{prefix} {entry.name}/")
+                            dir_count += 1
+                        else:
+                            size = entry.stat().st_size
+                            size_str = self._format_size(size)
+                            prefix = "👻📄" if is_hidden else "📄"
+                            lines.append(f"{prefix} {entry.name} ({size_str})")
+                            file_count += 1
+                            total_size += size
+
+                        if is_hidden:
+                            hidden_count += 1
+
+                    formatted = "\n".join(lines)
+
+                    # Add truncation warning if needed
+                    if truncated:
+                        formatted += f"\n\n[Directory truncated - showing first {MAX_ENTRIES} of {total_entries} entries]"
+                        formatted += f"\n[Use 'glob' or 'grep' to filter/search for specific files]"
+
+                    # Analyze directory for metadata hints
+                    directory_analysis = self._analyze_directory(entries, total_size)
+
+                    metadata = {
+                        'is_directory': True,
+                        'total_entries': total_entries,
+                        'shown_entries': len(display_entries),
+                        'truncated': truncated,
+                        'subdirs': dir_count,
+                        'files': file_count,
+                        'symlinks': symlink_count,
+                        'broken_symlinks': broken_symlink_count,
+                        'hidden_files': hidden_count,
+                        'total_size': total_size,
+                        'total_size_formatted': self._format_size(total_size),
+                        'path': str(path),
+                        'directory_analysis': directory_analysis
+                    }
+
+                    return ToolResult(True, formatted, metadata=metadata)
+                except PermissionError:
+                    error_msg = f"Permission denied: {file_path}\n"
+                    error_msg += "\nSuggestions:\n"
+                    error_msg += "• Check file/directory permissions using 'bash ls -la'\n"
+                    error_msg += "• You may need sudo access to read this directory\n"
+                    error_msg += "• Try accessing a parent or child directory instead"
+                    return ToolResult(False, None, error_msg)
 
             if not path.is_file():
-                return ToolResult(False, None, f"Not a file: {file_path}")
+                error_msg = f"Not a regular file or directory: {file_path}\n"
+                error_msg += "\nThis path exists but is not a regular file (could be a special file, socket, etc.)\n"
+                error_msg += "Suggestions:\n"
+                error_msg += "• Use 'bash ls -la' to check what type of file this is\n"
+                error_msg += "• Try accessing the parent directory instead"
+                return ToolResult(False, None, error_msg)
 
-            lines = path.read_text().splitlines()
+            # Try to read as text with encoding fallbacks
+            lines = None
+            encoding_used = None
+            encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+
+            for encoding in encodings_to_try:
+                try:
+                    lines = path.read_text(encoding=encoding).splitlines()
+                    encoding_used = encoding
+                    break
+                except UnicodeDecodeError:
+                    continue
+                except Exception as e:
+                    # Other errors (permission, etc.)
+                    return ToolResult(False, None, f"Error reading file: {e}")
+
+            # If all encodings failed, it's likely binary
+            if lines is None:
+                file_type = self._detect_file_type(path)
+                size = path.stat().st_size
+                size_str = self._format_size(size)
+
+                error_msg = f"Cannot read binary file: {path.name}\n"
+                error_msg += f"File type: {file_type}\n"
+                error_msg += f"Size: {size_str}\n"
+                error_msg += "This appears to be a binary file (image, executable, etc.)"
+
+                metadata = {
+                    'is_binary': True,
+                    'file_type': file_type,
+                    'size': size,
+                    'file_path': str(path)
+                }
+
+                return ToolResult(False, error_msg, metadata=metadata)
 
             # Apply offset and limit
+            # Default max lines to prevent overwhelming context
+            MAX_LINES = 2000
+            total_lines = len(lines)
             start = offset
-            end = offset + limit if limit else len(lines)
+
+            # If no limit specified and file is large, apply default truncation
+            if limit is None and total_lines > MAX_LINES:
+                end = start + MAX_LINES
+                truncated = True
+            else:
+                end = offset + limit if limit else total_lines
+                truncated = False
+
             selected_lines = lines[start:end]
 
             # Format with line numbers
@@ -185,17 +331,233 @@ class ToolRegistry:
                 for i, line in enumerate(selected_lines)
             )
 
+            # Add truncation warning if needed
+            if truncated:
+                formatted += f"\n\n[Content truncated - showing first {MAX_LINES} lines of {total_lines}]"
+                formatted += f"\n[Use offset and limit parameters to read other sections]"
+
+            # Analyze file complexity for metadata hints
+            file_analysis = self._analyze_file_complexity(lines, path)
+
             metadata = {
-                'total_lines': len(lines),
+                'total_lines': total_lines,
                 'returned_lines': len(selected_lines),
                 'offset': start,
-                'file_path': str(path)
+                'truncated': truncated,
+                'encoding': encoding_used,
+                'encoding_guessed': encoding_used != 'utf-8',
+                'file_path': str(path),
+                'file_analysis': file_analysis
             }
 
             return ToolResult(True, formatted, metadata=metadata)
 
         except Exception as e:
             return ToolResult(False, None, f"Error reading file: {e}")
+
+    def _format_size(self, size: int) -> str:
+        """Format file size in human-readable format"""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024:
+                return f"{size:.1f}{unit}"
+            size /= 1024
+        return f"{size:.1f}TB"
+
+    def _detect_file_type(self, path: Path) -> str:
+        """Detect file type from extension"""
+        ext = path.suffix.lower()
+
+        type_map = {
+            # Images
+            '.png': 'PNG image',
+            '.jpg': 'JPEG image',
+            '.jpeg': 'JPEG image',
+            '.gif': 'GIF image',
+            '.bmp': 'BMP image',
+            '.webp': 'WebP image',
+            '.svg': 'SVG image',
+            '.ico': 'Icon file',
+            # Executables
+            '.exe': 'Windows executable',
+            '.dll': 'Windows DLL',
+            '.so': 'Shared library',
+            '.dylib': 'macOS library',
+            '.bin': 'Binary file',
+            # Archives
+            '.zip': 'ZIP archive',
+            '.tar': 'TAR archive',
+            '.gz': 'GZIP archive',
+            '.bz2': 'BZIP2 archive',
+            '.7z': '7-Zip archive',
+            '.rar': 'RAR archive',
+            # Documents
+            '.pdf': 'PDF document',
+            '.doc': 'Word document',
+            '.docx': 'Word document',
+            '.xls': 'Excel spreadsheet',
+            '.xlsx': 'Excel spreadsheet',
+            # Media
+            '.mp3': 'MP3 audio',
+            '.mp4': 'MP4 video',
+            '.avi': 'AVI video',
+            '.mov': 'QuickTime video',
+            '.wav': 'WAV audio',
+            # Databases
+            '.db': 'Database file',
+            '.sqlite': 'SQLite database',
+            '.sqlite3': 'SQLite database',
+            # Code files
+            '.py': 'Python',
+            '.js': 'JavaScript',
+            '.ts': 'TypeScript',
+            '.tsx': 'TypeScript React',
+            '.jsx': 'JavaScript React',
+            '.java': 'Java',
+            '.cpp': 'C++',
+            '.c': 'C',
+            '.h': 'C Header',
+            '.hpp': 'C++ Header',
+            '.rs': 'Rust',
+            '.go': 'Go',
+            '.rb': 'Ruby',
+            '.php': 'PHP',
+            '.swift': 'Swift',
+            '.kt': 'Kotlin',
+            '.scala': 'Scala',
+            '.sh': 'Shell Script',
+            '.bash': 'Bash Script',
+            '.zsh': 'Zsh Script',
+            # Markup/Config
+            '.json': 'JSON',
+            '.xml': 'XML',
+            '.yaml': 'YAML',
+            '.yml': 'YAML',
+            '.toml': 'TOML',
+            '.ini': 'INI',
+            '.md': 'Markdown',
+            '.rst': 'reStructuredText',
+            '.html': 'HTML',
+            '.css': 'CSS',
+            '.scss': 'SCSS',
+            '.sass': 'Sass',
+        }
+
+        return type_map.get(ext, f'Text file ({ext})' if ext else 'Text file')
+
+    def _analyze_directory(self, entries: list, total_size: int) -> dict:
+        """Analyze directory contents for metadata hints"""
+        # Count file types
+        file_types = {}
+        for entry in entries:
+            if entry.is_file():
+                ext = entry.suffix.lower() or 'no_extension'
+                file_types[ext] = file_types.get(ext, 0) + 1
+
+        # Sort by frequency
+        sorted_types = sorted(file_types.items(), key=lambda x: x[1], reverse=True)
+
+        # Determine suggested action
+        total_entries = len(entries)
+        if total_entries > 100:
+            suggested_action = 'use_glob'
+            reason = f'Directory has {total_entries} entries - too many to browse manually'
+        elif total_entries > 50:
+            suggested_action = 'use_grep'
+            reason = f'Directory has {total_entries} entries - consider using grep to search'
+        else:
+            suggested_action = 'can_list'
+            reason = 'Directory size is manageable for browsing'
+
+        return {
+            'file_type_distribution': dict(sorted_types[:10]),  # Top 10 types
+            'total_size_bytes': total_size,
+            'total_size_formatted': self._format_size(total_size),
+            'suggested_action': suggested_action,
+            'suggestion_reason': reason
+        }
+
+    def _analyze_file_complexity(self, lines: list, path: Path) -> dict:
+        """Analyze file complexity for metadata hints"""
+        total_lines = len(lines)
+        ext = path.suffix.lower()
+
+        # Count imports/includes
+        import_count = 0
+        import_patterns = {
+            '.py': ['import ', 'from '],
+            '.js': ['import ', 'require('],
+            '.ts': ['import ', 'require('],
+            '.jsx': ['import ', 'require('],
+            '.tsx': ['import ', 'require('],
+            '.java': ['import '],
+            '.cpp': ['#include'],
+            '.c': ['#include'],
+            '.go': ['import '],
+            '.rs': ['use '],
+        }
+
+        patterns = import_patterns.get(ext, [])
+        for line in lines:
+            stripped = line.strip()
+            if any(stripped.startswith(p) for p in patterns):
+                import_count += 1
+
+        # Detect nesting depth
+        max_indent = 0
+        for line in lines:
+            if line.strip():  # Skip empty lines
+                # Count leading spaces/tabs
+                indent = len(line) - len(line.lstrip())
+                max_indent = max(max_indent, indent)
+
+        # Rough nesting level (assuming 4-space or 2-space indents)
+        indent_unit = 4 if max_indent > 0 else 1
+        estimated_nesting = max_indent // indent_unit
+
+        # Detect complexity indicators
+        is_deeply_nested = estimated_nesting > 5
+        many_imports = import_count > 20
+        very_long = total_lines > 1000
+
+        # Estimate token count (rough: 1 token ≈ 4 chars)
+        total_chars = sum(len(line) for line in lines)
+        estimated_tokens = total_chars // 4
+
+        # Determine complexity level
+        complexity_score = 0
+        if is_deeply_nested:
+            complexity_score += 2
+        if many_imports:
+            complexity_score += 2
+        if very_long:
+            complexity_score += 1
+        if estimated_tokens > 4000:
+            complexity_score += 1
+
+        if complexity_score >= 4:
+            complexity = 'very_high'
+            suggested_model = 'quality'
+        elif complexity_score >= 2:
+            complexity = 'high'
+            suggested_model = 'balanced'
+        else:
+            complexity = 'low'
+            suggested_model = 'fast'
+
+        return {
+            'file_type': self._detect_file_type(path),
+            'total_lines': total_lines,
+            'estimated_tokens': estimated_tokens,
+            'complexity': complexity,
+            'complexity_indicators': {
+                'deeply_nested': is_deeply_nested,
+                'many_imports': many_imports,
+                'very_long': very_long,
+                'import_count': import_count,
+                'max_nesting_level': estimated_nesting
+            },
+            'suggested_model': suggested_model
+        }
 
     def _write_file(self, file_path: str, content: str) -> ToolResult:
         """Write content to file"""
@@ -306,10 +668,39 @@ class ToolRegistry:
             except:
                 file_list = [str(m) for m in matches]
 
+            # Analyze results for metadata hints
+            result_count = len(matches)
+
+            # Count file types in results
+            file_types = {}
+            for match in matches:
+                if match.is_file():
+                    ext = match.suffix.lower() or 'no_extension'
+                    file_types[ext] = file_types.get(ext, 0) + 1
+
+            # Determine result quality and suggestions
+            if result_count == 0:
+                result_quality = 'no_matches'
+                suggested_action = 'refine_pattern'
+            elif result_count > 100:
+                result_quality = 'too_many'
+                suggested_action = 'narrow_pattern'
+            elif result_count > 20:
+                result_quality = 'many'
+                suggested_action = 'review_carefully'
+            else:
+                result_quality = 'good'
+                suggested_action = 'can_review_all'
+
             metadata = {
-                'count': len(matches),
+                'count': result_count,
                 'pattern': pattern,
-                'search_path': str(search_path)
+                'search_path': str(search_path),
+                'result_analysis': {
+                    'quality': result_quality,
+                    'file_type_distribution': file_types,
+                    'suggested_action': suggested_action
+                }
             }
 
             if not file_list:
@@ -376,10 +767,47 @@ class ToolRegistry:
                     output_lines.append("")  # Blank line between matches
 
             output = "\n".join(output_lines)
+
+            # Analyze results for metadata hints
+            result_count = len(matches)
+
+            # Group matches by file
+            files_with_matches = {}
+            for match in matches:
+                file_name = match['file']
+                files_with_matches[file_name] = files_with_matches.get(file_name, 0) + 1
+
+            unique_files = len(files_with_matches)
+
+            # Determine result quality and suggestions
+            if result_count > 200:
+                result_quality = 'overwhelming'
+                suggested_action = 'narrow_pattern_or_path'
+                suggested_model = 'balanced'
+            elif result_count > 50:
+                result_quality = 'many'
+                suggested_action = 'consider_chunking'
+                suggested_model = 'fast'
+            elif result_count > 10:
+                result_quality = 'moderate'
+                suggested_action = 'review_carefully'
+                suggested_model = 'fast'
+            else:
+                result_quality = 'focused'
+                suggested_action = 'can_review_all'
+                suggested_model = 'fast'
+
             metadata = {
-                'count': len(matches),
+                'count': result_count,
                 'pattern': pattern,
-                'search_path': str(search_path)
+                'search_path': str(search_path),
+                'result_analysis': {
+                    'quality': result_quality,
+                    'unique_files': unique_files,
+                    'matches_per_file_avg': result_count / unique_files if unique_files > 0 else 0,
+                    'suggested_action': suggested_action,
+                    'suggested_model': suggested_model
+                }
             }
 
             return ToolResult(True, output, metadata=metadata)
@@ -442,6 +870,13 @@ class ToolRegistry:
 
     def _web_fetch(self, url: str) -> ToolResult:
         """Fetch and convert URL to readable text"""
+        jina_endpoint = os.getenv("TWIN_JINA_RAPID_URL")
+        if jina_endpoint:
+            rapid_result = self._web_fetch_via_jina(url, jina_endpoint)
+            if rapid_result.success:
+                return rapid_result
+
+        # Fall back to the built-in HTML parser if the proxy can't be reached
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -476,6 +911,34 @@ class ToolRegistry:
 
         except Exception as e:
             return ToolResult(False, None, f"Failed to fetch URL: {e}")
+
+    def _web_fetch_via_jina(self, url: str, endpoint: str) -> ToolResult:
+        """Use the Jina rapid proxy service when configured."""
+        try:
+            separator = '&' if '?' in endpoint else '?'
+            resp = requests.get(f"{endpoint}{separator}url={quote_plus(url)}", timeout=15)
+            resp.raise_for_status()
+            payload = resp.json()
+
+            title = payload.get('title') or 'Untitled'
+            text = payload.get('text', '')
+            if not text:
+                return ToolResult(False, None, "Jina proxy returned empty text")
+
+            if len(text) > 10000:
+                text = text[:10000] + "\n\n[Content truncated by twin at 10,000 characters]"
+
+            formatted = f"Title: {title}\n\n{text}"
+            metadata = {
+                'source': 'jina-rapid',
+                'url': payload.get('url', url),
+                'status_code': payload.get('status_code'),
+                'elapsed_seconds': payload.get('elapsed_seconds')
+            }
+            return ToolResult(True, formatted, metadata=metadata)
+
+        except Exception as exc:
+            return ToolResult(False, None, f"Jina rapid fetch failed: {exc}")
 
     def _register_github_tools(self):
         """Register GitHub API tools"""

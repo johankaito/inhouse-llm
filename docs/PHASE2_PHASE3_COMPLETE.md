@@ -192,6 +192,8 @@ Twin's system prompt now includes:
 9. **gh_search_code** - Search GitHub (requires token)
 10. **gh_get_pr** - Get PR details (requires token)
 
+> **Optional enhancement:** Run `jina-rapid` locally and set `TWIN_JINA_RAPID_URL=http://127.0.0.1:8000/fetch` so `web_fetch` can call your own proxy instead of `requests`/`BeautifulSoup`. Instructions are in `docs/JINA_RAPID.md`.
+
 ### Self-Improvement (1)
 11. **improve_self** - Autonomously improve twin's code
 

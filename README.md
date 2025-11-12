@@ -673,6 +673,10 @@ au CursorHold,CursorHoldI * checktime
 - Embeddings: nomic-embed-text (local, no external API)
 ```
 
+### Optional: Jina Rapid Proxy for Twin
+
+Twin's `web_fetch` tool already parses HTML, but it can optionally call a local Jina-inspired proxy so you don't rely on `https://r.jina.ai/`. The `jina-rapid/` folder contains a small FastAPI service + Docker Compose that mirrors the remote API, keeps results under your control, and exposes the same `fetch?url=` contract. Run it locally (or via Docker) and point `TWIN_JINA_RAPID_URL` at `http://127.0.0.1:8000/fetch` before launching Twin. Detailed steps live in `docs/JINA_RAPID.md`.
+
 ### Knowledge-Base-Only Prompting
 
 **Restricting answers to ONLY your documents:**

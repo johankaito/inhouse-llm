@@ -9,7 +9,12 @@
       "Bash(pip3 install:*)",
       "Bash(twin --help:*)",
       "Bash(timeout 2 twin:*)",
-      "Bash(twin --no-context:*)"
+      "Bash(twin --no-context:*)",
+      "Bash(pip3 uninstall:*)",
+      "Bash(pip3 list:*)",
+      "Bash(timeout 6 python3:*)",
+      "Bash(ollama pull:*)",
+      "Bash(=3.0.0)"
     ]
   }
 }

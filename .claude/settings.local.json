@@ -16,5 +16,12 @@
       "Bash(ollama pull:*)",
       "Bash(=3.0.0)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "whatsapp",
+    "notion",
+    "puppeteer",
+    "linear"
+  ]
 }

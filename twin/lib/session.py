@@ -24,6 +24,7 @@ from rich.text import Text
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.clipboard import ClipboardData
 
 from tools import ToolRegistry, ToolResult
 
@@ -124,6 +125,9 @@ class SessionOrchestrator:
         # Initialize prompt session with multiline by default
         self.prompt_session = self._create_prompt_session()
 
+        # Track paste events
+        self.paste_detected = False
+
     def _create_prompt_session(self) -> PromptSession:
         """Create prompt session with multiline input (Ctrl+D to submit)"""
         # Create custom key bindings
@@ -140,6 +144,16 @@ class SessionOrchestrator:
         def _(event):
             """Add newline on Enter"""
             event.current_buffer.insert_text('\n')
+
+        # Ctrl+V paste detection
+        @kb.add('c-v')
+        def _(event):
+            """Detect paste event and mark flag"""
+            # Mark that a paste happened
+            self.paste_detected = True
+            # Perform the actual paste
+            data = event.app.clipboard.get_data()
+            event.current_buffer.insert_text(data.text)
 
         return PromptSession(
             multiline=True,
@@ -193,13 +207,14 @@ class SessionOrchestrator:
                 # Check for images (clipboard or paths)
                 image_paths = []
 
-                # Only check clipboard if user explicitly mentions "clipboard" or "paste"
-                # or uses /image command
-                if any(keyword in user_input.lower() for keyword in ['clipboard', 'paste', 'pasted', '/image']):
+                # Check clipboard only if user pressed Ctrl+V (paste_detected flag)
+                if self.paste_detected:
                     clipboard_image = self._check_clipboard_for_image()
                     if clipboard_image:
                         console.print(f"[green]📸 Image detected in clipboard → {clipboard_image}[/green]")
                         image_paths.append(clipboard_image)
+                    # Reset the flag after checking
+                    self.paste_detected = False
 
                 # Check for image paths in text
                 text_images = self._detect_image_paths(user_input)
@@ -714,7 +729,7 @@ OUTPUT: {result.output if result.output else result.error}
 
 **Image Support:**
 - Include image file paths in your message (e.g., `/path/to/image.png`)
-- To use clipboard images, mention "clipboard" or "paste" in your message
+- Paste clipboard images with **Ctrl+V** (clipboard checked automatically on paste)
 - Vision support requires a vision model (e.g., `ollama pull llava:7b`)
 
 **Tips:**

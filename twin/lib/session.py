@@ -193,11 +193,13 @@ class SessionOrchestrator:
                 # Check for images (clipboard or paths)
                 image_paths = []
 
-                # Check clipboard first
-                clipboard_image = self._check_clipboard_for_image()
-                if clipboard_image:
-                    console.print(f"[green]📸 Image detected in clipboard → {clipboard_image}[/green]")
-                    image_paths.append(clipboard_image)
+                # Only check clipboard if user explicitly mentions "clipboard" or "paste"
+                # or uses /image command
+                if any(keyword in user_input.lower() for keyword in ['clipboard', 'paste', 'pasted', '/image']):
+                    clipboard_image = self._check_clipboard_for_image()
+                    if clipboard_image:
+                        console.print(f"[green]📸 Image detected in clipboard → {clipboard_image}[/green]")
+                        image_paths.append(clipboard_image)
 
                 # Check for image paths in text
                 text_images = self._detect_image_paths(user_input)
@@ -709,6 +711,11 @@ OUTPUT: {result.output if result.output else result.error}
   - Press **Enter** to add new lines
   - Press **Ctrl+D** to submit your input
 - Use `/multiline` for numbered-line mode (Enter twice to submit)
+
+**Image Support:**
+- Include image file paths in your message (e.g., `/path/to/image.png`)
+- To use clipboard images, mention "clipboard" or "paste" in your message
+- Vision support requires a vision model (e.g., `ollama pull llava:7b`)
 
 **Tips:**
 - Ask planning questions naturally

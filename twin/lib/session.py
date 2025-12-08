@@ -141,7 +141,7 @@ class SessionOrchestrator:
         kb = KeyBindings()
 
         # Enter submits, unless Shift is held (then newline)
-        @kb.add('enter', filter=lambda: True)
+        @kb.add('enter')
         def _(event):
             """Submit on Enter, or newline if Shift is held"""
             # Check if Shift is being held

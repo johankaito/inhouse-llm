@@ -136,21 +136,21 @@ class SessionOrchestrator:
         self.paste_detected = False
 
     def _create_prompt_session(self) -> PromptSession:
-        """Create prompt session with multiline input (Enter to submit, Shift+Enter for newline)"""
+        """Create prompt session with multiline input (Enter to submit, Escape+Enter for newline)"""
         # Create custom key bindings
         kb = KeyBindings()
 
-        # Enter submits, unless Shift is held (then newline)
+        # Enter submits the input
         @kb.add('enter')
         def _(event):
-            """Submit on Enter, or newline if Shift is held"""
-            # Check if Shift is being held
-            if event.key_sequence[0].shift:
-                # Shift+Enter = newline
-                event.current_buffer.insert_text('\n')
-            else:
-                # Plain Enter = submit
-                event.current_buffer.validate_and_handle()
+            """Submit on Enter"""
+            event.current_buffer.validate_and_handle()
+
+        # Escape followed by Enter adds a newline
+        @kb.add('escape', 'enter')
+        def _(event):
+            """Add newline on Escape+Enter"""
+            event.current_buffer.insert_text('\n')
 
         # Ctrl+V paste detection and system clipboard access
         @kb.add('c-v')
@@ -749,8 +749,8 @@ OUTPUT: {result.output if result.output else result.error}
 
 **Input Mode:**
 - **Press Enter** to submit your message
-- **Press Shift+Enter** to add a new line (for multiline messages)
-- Use `/multiline` for numbered-line mode (Enter twice to submit)
+- **Press Escape then Enter** (Esc → Enter) to add a new line
+- Use `/multiline` for numbered-line mode with line numbers (Enter twice to submit)
 
 **Image Support:**
 - Include image file paths in your message (e.g., `/path/to/image.png`)

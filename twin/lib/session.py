@@ -23,6 +23,7 @@ from rich.live import Live
 from rich.text import Text
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 
 from tools import ToolRegistry, ToolResult
 
@@ -125,14 +126,28 @@ class SessionOrchestrator:
 
     def _create_prompt_session(self) -> PromptSession:
         """Create prompt session with multiline input (Ctrl+D to submit)"""
-        # Note: Option+Enter and Alt+Enter are difficult to bind reliably across terminals
-        # Ctrl+D is the universal "end of input" signal and works everywhere
+        # Create custom key bindings
+        kb = KeyBindings()
+
+        # Ctrl+D submits the input (EOF)
+        @kb.add('c-d')
+        def _(event):
+            """Submit input on Ctrl+D"""
+            event.current_buffer.validate_and_handle()
+
+        # Enter adds a newline
+        @kb.add('enter')
+        def _(event):
+            """Add newline on Enter"""
+            event.current_buffer.insert_text('\n')
+
         return PromptSession(
             multiline=True,
             complete_while_typing=False,
             enable_history_search=False,
             mouse_support=False,
-            prompt_continuation='... '  # Show continuation on new lines
+            prompt_continuation='... ',  # Show continuation on new lines
+            key_bindings=kb
         )
 
     def run(self):
@@ -679,7 +694,7 @@ OUTPUT: {result.output if result.output else result.error}
 **Available Commands:**
 
 - `/help` - Show this help message
-- `/multiline` - Enter multiline mode (press Enter twice to submit)
+- `/multiline` - Enter multiline mode with line numbers (press Enter twice to submit)
 - `/mode work|personal` - Switch between work and personal mode
 - `/agent <name>` - Switch to a different agent
 - `/model <alias>` - Switch model (fast/balanced/quality/reasoning or full name)
@@ -689,13 +704,16 @@ OUTPUT: {result.output if result.output else result.error}
 - `/reload` - Reload twin modules (after manual code changes)
 - `/bye` - Save and exit session
 
-**Tips:**
-- **Multiline input by default:** Press Enter to add new lines
-- **Press Ctrl+D to submit** (universal end-of-input signal)
+**Input Mode:**
+- **By default:** Multiline input is enabled
+  - Press **Enter** to add new lines
+  - Press **Ctrl+D** to submit your input
 - Use `/multiline` for numbered-line mode (Enter twice to submit)
+
+**Tips:**
 - Ask planning questions naturally
 - Agent will apply 5 Whys for major decisions
-- Switch models mid-session without restarting: `/model balanced`
+- Switch models mid-session: `/model balanced`
 - Context is saved automatically on exit
 - Twin auto-restarts after self-improvements
 """

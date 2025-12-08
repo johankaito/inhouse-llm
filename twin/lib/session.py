@@ -140,17 +140,17 @@ class SessionOrchestrator:
         # Create custom key bindings
         kb = KeyBindings()
 
-        # Enter submits the input
-        @kb.add('enter')
+        # Enter submits, unless Shift is held (then newline)
+        @kb.add('enter', filter=lambda: True)
         def _(event):
-            """Submit input on Enter"""
-            event.current_buffer.validate_and_handle()
-
-        # Shift+Enter adds a newline
-        @kb.add('s-enter')
-        def _(event):
-            """Add newline on Shift+Enter"""
-            event.current_buffer.insert_text('\n')
+            """Submit on Enter, or newline if Shift is held"""
+            # Check if Shift is being held
+            if event.key_sequence[0].shift:
+                # Shift+Enter = newline
+                event.current_buffer.insert_text('\n')
+            else:
+                # Plain Enter = submit
+                event.current_buffer.validate_and_handle()
 
         # Ctrl+V paste detection and system clipboard access
         @kb.add('c-v')

@@ -26,6 +26,13 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.clipboard import ClipboardData
 
+# For system clipboard access
+try:
+    import pyperclip
+    PYPERCLIP_AVAILABLE = True
+except ImportError:
+    PYPERCLIP_AVAILABLE = False
+
 from tools import ToolRegistry, ToolResult
 
 # For ESC interrupt - using pynput instead of keyboard (works on macOS without permissions)
@@ -129,31 +136,50 @@ class SessionOrchestrator:
         self.paste_detected = False
 
     def _create_prompt_session(self) -> PromptSession:
-        """Create prompt session with multiline input (Ctrl+D to submit)"""
+        """Create prompt session with multiline input (Enter to submit, Shift+Enter for newline)"""
         # Create custom key bindings
         kb = KeyBindings()
 
-        # Ctrl+D submits the input (EOF)
-        @kb.add('c-d')
-        def _(event):
-            """Submit input on Ctrl+D"""
-            event.current_buffer.validate_and_handle()
-
-        # Enter adds a newline
+        # Enter submits the input
         @kb.add('enter')
         def _(event):
-            """Add newline on Enter"""
+            """Submit input on Enter"""
+            event.current_buffer.validate_and_handle()
+
+        # Shift+Enter adds a newline
+        @kb.add('s-enter')
+        def _(event):
+            """Add newline on Shift+Enter"""
             event.current_buffer.insert_text('\n')
 
-        # Ctrl+V paste detection
+        # Ctrl+V paste detection and system clipboard access
         @kb.add('c-v')
         def _(event):
-            """Detect paste event and mark flag"""
-            # Mark that a paste happened
+            """Detect paste event, check system clipboard for images, and paste text"""
+            # Mark that a paste happened (for image detection)
             self.paste_detected = True
-            # Perform the actual paste
-            data = event.app.clipboard.get_data()
-            event.current_buffer.insert_text(data.text)
+
+            # Get text from system clipboard using pyperclip
+            if PYPERCLIP_AVAILABLE:
+                try:
+                    clipboard_text = pyperclip.paste()
+                    if clipboard_text:
+                        event.current_buffer.insert_text(clipboard_text)
+                    # If no text but there's an image, that's fine - we'll detect it after
+                except Exception:
+                    # Fallback to prompt_toolkit's internal clipboard
+                    try:
+                        data = event.app.clipboard.get_data()
+                        event.current_buffer.insert_text(data.text)
+                    except:
+                        pass  # Silent fail - no clipboard content
+            else:
+                # Fallback to prompt_toolkit's clipboard if pyperclip not available
+                try:
+                    data = event.app.clipboard.get_data()
+                    event.current_buffer.insert_text(data.text)
+                except:
+                    pass
 
         return PromptSession(
             multiline=True,
@@ -722,14 +748,13 @@ OUTPUT: {result.output if result.output else result.error}
 - `/bye` - Save and exit session
 
 **Input Mode:**
-- **By default:** Multiline input is enabled
-  - Press **Enter** to add new lines
-  - Press **Ctrl+D** to submit your input
+- **Press Enter** to submit your message
+- **Press Shift+Enter** to add a new line (for multiline messages)
 - Use `/multiline` for numbered-line mode (Enter twice to submit)
 
 **Image Support:**
 - Include image file paths in your message (e.g., `/path/to/image.png`)
-- Paste clipboard images with **Ctrl+V** (clipboard checked automatically on paste)
+- **Press Ctrl+V** to paste from clipboard (detects both text and images)
 - Vision support requires a vision model (e.g., `ollama pull llava:7b`)
 
 **Tips:**

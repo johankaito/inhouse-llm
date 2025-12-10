@@ -17,7 +17,7 @@ from typing import Dict, Any, List, Optional
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
 from rich.spinner import Spinner
 from rich.live import Live
 from rich.text import Text
@@ -725,6 +725,34 @@ OUTPUT: {result.output if result.output else result.error}
             console.print(f"\n[cyan]{summary}[/cyan]\n")
             return 'continue'
 
+        elif cmd == 'sessions':
+            # Parse subcommand
+            subparts = args.split(maxsplit=1) if args else []
+            subcmd = subparts[0].lower() if subparts else 'list'
+            subargs = subparts[1] if len(subparts) > 1 else ""
+
+            if subcmd == 'list' or not subcmd:
+                self._list_sessions_verbose()
+            elif subcmd == 'show':
+                try:
+                    index = int(subargs)
+                    self._show_session(index)
+                except ValueError:
+                    console.print("\n[yellow]Usage: /sessions show <number>[/yellow]\n")
+            elif subcmd == 'delete':
+                try:
+                    index = int(subargs)
+                    self._delete_session(index)
+                except ValueError:
+                    console.print("\n[yellow]Usage: /sessions delete <number>[/yellow]\n")
+            elif subcmd == 'clear':
+                self._clear_sessions()
+            else:
+                console.print(f"\n[yellow]Unknown subcommand: {subcmd}[/yellow]")
+                console.print("[dim]Available: list, show, delete, clear[/dim]\n")
+
+            return 'continue'
+
         elif cmd == 'save':
             self._save_session()
             console.print(f"\n[green]✓ Session saved[/green]\n")
@@ -759,6 +787,10 @@ OUTPUT: {result.output if result.output else result.error}
 
 - `/help` - Show this help message
 - `/terminal-setup` - Configure your terminal for Shift+Enter support
+- `/sessions` - List all sessions (or /sessions list)
+- `/sessions show <N>` - View specific session content
+- `/sessions delete <N>` - Delete specific session
+- `/sessions clear` - Delete all sessions (with archive)
 - `/multiline` - Enter multiline mode with line numbers (press Enter twice to submit)
 - `/mode work|personal` - Switch between work and personal mode
 - `/agent <name>` - Switch to a different agent
@@ -987,6 +1019,105 @@ Next Steps:
 [green]After setup, Shift+Enter will add newlines[/green]
 """
         console.print(Markdown(instructions))
+
+    def _list_sessions_verbose(self):
+        """Display verbose list of all sessions"""
+        cwd = os.getcwd()
+        sessions = self.context_manager.list_sessions_verbose(cwd)
+
+        if not sessions:
+            console.print("\n[yellow]No sessions found[/yellow]\n")
+            return
+
+        total_lines = sum(s['line_count'] for s in sessions)
+
+        console.print(f"\n[cyan]📂 Context Sessions for:[/cyan] [dim]{cwd}[/dim]")
+        console.print(f"[cyan]Found {len(sessions)} session(s) ({total_lines} lines total)[/cyan]\n")
+
+        for s in sessions:
+            mode_color = "cyan" if s['mode'] == 'work' else "green"
+            console.print(f"[bold]{s['index']:2d}.[/bold] [{mode_color}][{s['timestamp']}][/{mode_color}] [{mode_color}]{s['mode'].upper()} MODE[/{mode_color}] [dim]({s['line_count']} lines)[/dim]")
+            console.print(f"    [yellow]Agent:[/yellow] {s['agent']}")
+            console.print(f"    [dim]Topic: {s['topic']}[/dim]\n")
+
+        console.print("[dim]Commands:[/dim]")
+        console.print("[dim]  /sessions show <num> - View full session content[/dim]")
+        console.print("[dim]  /sessions delete <num> - Delete specific session[/dim]")
+        console.print("[dim]  /sessions clear - Delete all sessions[/dim]\n")
+
+    def _show_session(self, index: int):
+        """Display full content of specific session"""
+        cwd = os.getcwd()
+        session = self.context_manager.get_session_by_index(cwd, index)
+
+        if not session:
+            console.print(f"\n[red]Session #{index} not found[/red]\n")
+            return
+
+        console.print(f"\n[cyan]Session #{index}: {session['timestamp']} [{session['mode'].upper()} MODE][/cyan]\n")
+        console.print(Panel(session['content'], border_style="dim"))
+        console.print()
+
+    def _delete_session(self, index: int):
+        """Delete specific session with confirmation"""
+        cwd = os.getcwd()
+        session = self.context_manager.get_session_by_index(cwd, index)
+
+        if not session:
+            console.print(f"\n[red]Session #{index} not found[/red]\n")
+            return
+
+        # Show what will be deleted
+        console.print(f"\n[yellow]⚠️  Delete session #{index}?[/yellow]")
+        console.print(f"[dim]Timestamp: {session['timestamp']}[/dim]")
+        console.print(f"[dim]Mode: {session['mode'].title()}[/dim]")
+
+        # Show topic preview
+        topic = session.get('topic', '')
+        if topic:
+            console.print(f"[dim]Topic: {topic}[/dim]")
+
+        console.print()
+
+        # Confirmation
+        if Confirm.ask("Delete this session?", default=False):
+            success = self.context_manager.delete_session_by_index(cwd, index)
+            if success:
+                console.print("[green]✅ Session deleted[/green]\n")
+            else:
+                console.print("[red]Failed to delete session[/red]\n")
+        else:
+            console.print("[yellow]Cancelled[/yellow]\n")
+
+    def _clear_sessions(self):
+        """Clear all sessions with confirmation and archiving"""
+        cwd = os.getcwd()
+        context = self.context_manager.load_context(cwd)
+
+        if not context:
+            console.print("\n[yellow]No sessions to clear[/yellow]\n")
+            return
+
+        sessions = context.get('sessions', [])
+        session_count = len(sessions)
+        line_count = len(context['raw_content'].split('\n'))
+
+        # Show warning
+        console.print(f"\n[red bold]⚠️  DELETE ALL SESSIONS?[/red bold]")
+        console.print(f"[yellow]This will delete {session_count} session(s) ({line_count} lines)[/yellow]")
+        console.print(f"[yellow]Sessions will be archived before deletion[/yellow]\n")
+
+        # Confirmation
+        if Confirm.ask("Are you sure?", default=False):
+            success, archive_path = self.context_manager.clear_context_with_archive(cwd)
+            if success:
+                console.print(f"[green]✅ Cleared {session_count} sessions[/green]")
+                if archive_path:
+                    console.print(f"[dim]📦 Archived to: {archive_path}[/dim]\n")
+            else:
+                console.print("[red]Failed to clear sessions[/red]\n")
+        else:
+            console.print("[yellow]Cancelled[/yellow]\n")
 
     def _handle_restart(self):
         """Handle restart after self-improvement"""

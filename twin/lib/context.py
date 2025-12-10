@@ -5,9 +5,10 @@ Manages context files in ~/.claude/context/
 
 import hashlib
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 
 class ContextManager:
@@ -17,6 +18,7 @@ class ContextManager:
         self.config = config
         self.context_dir = Path(config.get('context_dir', Path.home() / ".claude" / "context"))
         self.context_dir.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.context_dir / "archive"
 
     def get_context_filename(self, cwd: str) -> str:
         """Generate context filename from cwd hash"""
@@ -183,3 +185,154 @@ class ContextManager:
             summary_lines.append(f"Topic: {first_line}")
 
         return "\n".join(summary_lines)
+
+    def list_sessions_verbose(self, cwd: str) -> List[Dict[str, Any]]:
+        """Get detailed list of all sessions with metadata"""
+        context = self.load_context(cwd)
+        if not context:
+            return []
+
+        sessions = context.get('sessions', [])
+        verbose_sessions = []
+
+        for idx, session in enumerate(sessions, 1):
+            # Extract topic from content (first 100 chars of planning discussion)
+            topic = self._extract_topic_from_session(session)
+
+            # Count lines in session content
+            line_count = len(session.get('content', '').split('\n'))
+
+            verbose_sessions.append({
+                'index': idx,
+                'timestamp': session.get('timestamp', 'unknown'),
+                'mode': session.get('mode', 'personal'),
+                'agent': self._extract_agent_from_session(session),
+                'topic': topic,
+                'line_count': line_count,
+                'session_id': session.get('session_id', '')
+            })
+
+        return verbose_sessions
+
+    def _extract_topic_from_session(self, session: Dict[str, Any]) -> str:
+        """Extract topic preview from session content"""
+        content = session.get('content', '')
+
+        # Try to find planning discussion
+        planning_match = re.search(r'### Planning Discussion\n(.+?)(?=\n###|\Z)', content, re.DOTALL)
+        if planning_match:
+            planning_text = planning_match.group(1).strip()
+            # Get first line or first 100 chars
+            first_line = planning_text.split('\n')[0]
+            return first_line[:100] + ('...' if len(first_line) > 100 else '')
+
+        # Fallback: first line of content
+        lines = content.strip().split('\n')
+        if lines:
+            first_line = lines[0].replace('###', '').strip()
+            return first_line[:100] + ('...' if len(first_line) > 100 else '')
+
+        return "(no content)"
+
+    def _extract_agent_from_session(self, session: Dict[str, Any]) -> str:
+        """Extract agent name from session content"""
+        content = session.get('content', '')
+        agent_match = re.search(r'### Agent Active\n(.+?)\n', content)
+        if agent_match:
+            return agent_match.group(1).strip()
+        return "assistant"
+
+    def get_session_by_index(self, cwd: str, index: int) -> Optional[Dict[str, Any]]:
+        """Get session by 1-indexed position"""
+        context = self.load_context(cwd)
+        if not context:
+            return None
+
+        sessions = context.get('sessions', [])
+        if index < 1 or index > len(sessions):
+            return None
+
+        session = sessions[index - 1]
+        # Add topic for display
+        session['topic'] = self._extract_topic_from_session(session)
+        return session
+
+    def delete_session_by_index(self, cwd: str, index: int) -> bool:
+        """Delete specific session, rebuild context file"""
+        context = self.load_context(cwd)
+        if not context:
+            return False
+
+        sessions = context.get('sessions', [])
+        if index < 1 or index > len(sessions):
+            return False
+
+        # Remove session
+        sessions.pop(index - 1)
+
+        # Rebuild context file
+        return self._rebuild_context_file(cwd, context['repository'], sessions)
+
+    def _rebuild_context_file(self, cwd: str, repository: str, sessions: List[Dict[str, Any]]) -> bool:
+        """Rebuild context file with remaining sessions"""
+        context_path = self.get_context_path(cwd)
+
+        try:
+            # Build new content
+            content_parts = [f"# Repository: {repository}\n\n---\n\n"]
+
+            for session in sessions:
+                # Reconstruct session header
+                timestamp = session.get('timestamp', 'unknown')
+                session_id = session.get('session_id', '')
+                mode = session.get('mode', 'personal').upper()
+                source = session.get('source', 'TWIN')
+
+                header = f"## {timestamp} - Session {session_id} [{source}] [{mode} MODE]\n\n"
+                session_content = session.get('content', '')
+
+                content_parts.append(f"{header}{session_content}\n\n---\n\n")
+
+            # Write to file
+            context_path.write_text(''.join(content_parts))
+            return True
+
+        except Exception as e:
+            print(f"Error rebuilding context file: {e}")
+            return False
+
+    def archive_context(self, cwd: str) -> Optional[Path]:
+        """Archive context file to ~/.claude/context/archive/"""
+        context_path = self.get_context_path(cwd)
+
+        if not context_path.exists():
+            return None
+
+        # Create archive directory if needed
+        self.archive_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate archive filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        hash_part = context_path.stem  # e.g., "context-471f6709"
+        archive_name = f"{hash_part}_{timestamp}.txt"
+        archive_path = self.archive_dir / archive_name
+
+        try:
+            # Copy file to archive
+            shutil.copy2(context_path, archive_path)
+            return archive_path
+        except Exception as e:
+            print(f"Error archiving context: {e}")
+            return None
+
+    def clear_context_with_archive(self, cwd: str) -> Tuple[bool, Optional[Path]]:
+        """Archive then delete context file"""
+        # First archive
+        archive_path = self.archive_context(cwd)
+
+        if not archive_path:
+            return (False, None)
+
+        # Then delete
+        success = self.clear_context(cwd)
+        return (success, archive_path if success else None)

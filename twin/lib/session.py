@@ -25,6 +25,16 @@ from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.clipboard import ClipboardData
+from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+from prompt_toolkit.keys import Keys
+
+# CSI u keyboard protocol support for Shift+Enter
+# This allows iTerm2 and other modern terminals to send disambiguated key events
+# Shift+Enter: \x1b[13;2u where 13 = Enter keycode, 2 = Shift modifier
+# We map it to 'c-m' which is technically Ctrl+M (Enter's control code)
+# but with modifier information that prompt_toolkit can't normally see
+# The actual handling will be done by checking for this specific sequence
+ANSI_SEQUENCES['\x1b[13;2u'] = 'c-j'  # Map to a control sequence we can intercept
 
 # For system clipboard access
 try:
@@ -136,7 +146,7 @@ class SessionOrchestrator:
         self.paste_detected = False
 
     def _create_prompt_session(self) -> PromptSession:
-        """Create prompt session with multiline input (Enter to submit, Escape+Enter for newline)"""
+        """Create prompt session with multiline input (Enter to submit, Shift+Enter for newline)"""
         # Create custom key bindings
         kb = KeyBindings()
 
@@ -146,10 +156,17 @@ class SessionOrchestrator:
             """Submit on Enter"""
             event.current_buffer.validate_and_handle()
 
-        # Escape followed by Enter adds a newline
+        # Shift+Enter adds a newline (requires terminal setup - see /terminal-setup)
+        # We map Shift+Enter to Ctrl+J, which we intercept here
+        @kb.add('c-j')
+        def _(event):
+            """Add newline on Shift+Enter (CSI u protocol mapped to Ctrl+J)"""
+            event.current_buffer.insert_text('\n')
+
+        # Escape followed by Enter adds a newline (fallback for terminals without CSI u)
         @kb.add('escape', 'enter')
         def _(event):
-            """Add newline on Escape+Enter"""
+            """Add newline on Escape+Enter (fallback)"""
             event.current_buffer.insert_text('\n')
 
         # Ctrl+V paste detection and system clipboard access
@@ -721,6 +738,10 @@ OUTPUT: {result.output if result.output else result.error}
             self._reload_modules()
             return 'continue'
 
+        elif cmd == 'terminal-setup':
+            self._setup_terminal()
+            return 'continue'
+
         elif cmd in ['bye', 'exit', 'quit']:
             self._save_session()
             console.print(f"\n[green]✓ Session saved. Goodbye![/green]\n")
@@ -737,6 +758,7 @@ OUTPUT: {result.output if result.output else result.error}
 **Available Commands:**
 
 - `/help` - Show this help message
+- `/terminal-setup` - Configure your terminal for Shift+Enter support
 - `/multiline` - Enter multiline mode with line numbers (press Enter twice to submit)
 - `/mode work|personal` - Switch between work and personal mode
 - `/agent <name>` - Switch to a different agent
@@ -749,7 +771,8 @@ OUTPUT: {result.output if result.output else result.error}
 
 **Input Mode:**
 - **Press Enter** to submit your message
-- **Press Escape then Enter** (Esc → Enter) to add a new line
+- **Press Shift+Enter** to add a new line (requires `/terminal-setup` first)
+- **Press Escape then Enter** (Esc → Enter) also adds new line (fallback)
 - Use `/multiline` for numbered-line mode with line numbers (Enter twice to submit)
 
 **Image Support:**
@@ -889,14 +912,90 @@ Next Steps:
         if failed:
             console.print(f"[yellow]⚠ {len(failed)} modules failed to reload[/yellow]\n")
 
+    def _setup_terminal(self):
+        """Configure terminal for Shift+Enter support"""
+        console.print("\n[cyan]🔧 Terminal Setup for Shift+Enter[/cyan]\n")
+
+        # Detect terminal type
+        term_program = os.getenv('TERM_PROGRAM', '')
+        term = os.getenv('TERM', '')
+
+        if term_program == 'iTerm.app':
+            console.print("[green]✓ Detected iTerm2[/green]\n")
+            self._setup_iterm2()
+        elif 'kitty' in term:
+            console.print("[green]✓ Detected Kitty terminal[/green]")
+            console.print("[dim]Kitty natively supports CSI u protocol - Shift+Enter should work![/dim]\n")
+        elif 'wezterm' in term_program.lower():
+            console.print("[green]✓ Detected WezTerm[/green]")
+            console.print("[dim]WezTerm natively supports CSI u protocol - Shift+Enter should work![/dim]\n")
+        elif term_program == 'Apple_Terminal':
+            console.print("[yellow]⚠️  Detected Apple Terminal[/yellow]")
+            console.print("[dim]Terminal.app has limited key mapping support.[/dim]")
+            console.print("[dim]Consider using iTerm2 for full Shift+Enter support.[/dim]\n")
+            self._show_manual_instructions()
+        else:
+            console.print(f"[yellow]⚠️  Terminal not recognized: {term_program or term}[/yellow]")
+            console.print("[dim]Showing manual setup instructions...[/dim]\n")
+            self._show_manual_instructions()
+
+    def _setup_iterm2(self):
+        """Configure iTerm2 for Shift+Enter"""
+        console.print("[cyan]Configuring iTerm2 key bindings...[/cyan]")
+
+        try:
+            # Use defaults command to configure iTerm2 GlobalKeyMap
+            # Key format: "0xd-0x20000" where 0xd = Enter, 0x20000 = Shift modifier
+            cmd = [
+                'defaults', 'write', 'com.googlecode.iterm2',
+                'GlobalKeyMap', '-dict-add', '0xd-0x20000',
+                '<dict><key>Action</key><integer>10</integer><key>Text</key><string>[13;2u</string></dict>'
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                console.print("[green]✅ iTerm2 configured successfully![/green]\n")
+                console.print("[yellow]⚠️  Important: You must restart iTerm2 for changes to take effect[/yellow]")
+                console.print("[dim]   Close all iTerm2 windows and reopen[/dim]\n")
+                console.print("[green]After restart, Shift+Enter will add newlines[/green]")
+                console.print("[dim]   • Press Enter to submit[/dim]")
+                console.print("[dim]   • Press Shift+Enter to add new line[/dim]")
+                console.print("[dim]   • Escape+Enter also works as fallback[/dim]\n")
+            else:
+                console.print(f"[red]✗ Configuration failed: {result.stderr}[/red]\n")
+                self._show_manual_instructions()
+
+        except Exception as e:
+            console.print(f"[red]✗ Error configuring iTerm2: {e}[/red]\n")
+            self._show_manual_instructions()
+
+    def _show_manual_instructions(self):
+        """Show manual setup instructions for iTerm2"""
+        instructions = """
+[cyan]**Manual Setup Instructions for iTerm2:**[/cyan]
+
+1. Open iTerm2 → **Settings** (Cmd+,)
+2. Go to **Profiles** → **Keys** → **Key Mappings**
+3. Click **+** to add a new key mapping
+4. Press **Shift+Enter** when prompted for keyboard shortcut
+5. In the dropdown, select **"Send Escape Sequence"**
+6. In the text field, enter: `[13;2u`
+7. Click **OK**
+8. Restart iTerm2
+
+[green]After setup, Shift+Enter will add newlines[/green]
+"""
+        console.print(Markdown(instructions))
+
     def _handle_restart(self):
         """Handle restart after self-improvement"""
         console.print("\n[cyan]🔄 Twin improved itself! Restarting to load changes...[/cyan]")
         console.print("[dim]Your conversation context will be preserved[/dim]\n")
-        
+
         # Save current session
         self._save_session()
-        
+
         # Try hot reload first (faster, keeps context)
         try:
             self._reload_modules()

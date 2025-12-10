@@ -14,7 +14,11 @@
       "Bash(pip3 list:*)",
       "Bash(timeout 6 python3:*)",
       "Bash(ollama pull:*)",
-      "Bash(=3.0.0)"
+      "Bash(=3.0.0)",
+      "Bash(timeout 3 python3:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:python-prompt-toolkit.readthedocs.io)",
+      "WebFetch(domain:xon.sh)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -142,8 +142,9 @@ class SessionOrchestrator:
         # Initialize prompt session with multiline by default
         self.prompt_session = self._create_prompt_session()
 
-        # Track paste events
-        self.paste_detected = False
+        # Track pasted images for vision support
+        self.pasted_images = []  # List of {'id': N, 'path': '/tmp/...', 'placeholder': '[Image #N]'}
+        self.image_counter = 0
 
     def _create_prompt_session(self) -> PromptSession:
         """Create prompt session with multiline input (Enter to submit, Shift+Enter for newline)"""
@@ -169,34 +170,50 @@ class SessionOrchestrator:
             """Add newline on Escape+Enter (fallback)"""
             event.current_buffer.insert_text('\n')
 
-        # Ctrl+V paste detection and system clipboard access
+        # Ctrl+V paste - check for images first, then text
         @kb.add('c-v')
         def _(event):
-            """Detect paste event, check system clipboard for images, and paste text"""
-            # Mark that a paste happened (for image detection)
-            self.paste_detected = True
+            """Detect paste event, check clipboard for images (insert placeholder) or text"""
+            # First, check if clipboard contains an image
+            clipboard_image = self._check_clipboard_for_image()
 
-            # Get text from system clipboard using pyperclip
-            if PYPERCLIP_AVAILABLE:
-                try:
-                    clipboard_text = pyperclip.paste()
-                    if clipboard_text:
-                        event.current_buffer.insert_text(clipboard_text)
-                    # If no text but there's an image, that's fine - we'll detect it after
-                except Exception:
-                    # Fallback to prompt_toolkit's internal clipboard
+            if clipboard_image:
+                # Found an image - add placeholder and track it
+                self.image_counter += 1
+                placeholder = f"[Image #{self.image_counter}]"
+
+                self.pasted_images.append({
+                    'id': self.image_counter,
+                    'path': clipboard_image,
+                    'placeholder': placeholder
+                })
+
+                # Insert placeholder into buffer
+                event.current_buffer.insert_text(placeholder)
+
+                # Show feedback
+                console.print(f"[green]📸 {placeholder} pasted[/green]")
+            else:
+                # No image, paste text normally
+                if PYPERCLIP_AVAILABLE:
+                    try:
+                        clipboard_text = pyperclip.paste()
+                        if clipboard_text:
+                            event.current_buffer.insert_text(clipboard_text)
+                    except Exception:
+                        # Fallback to prompt_toolkit's internal clipboard
+                        try:
+                            data = event.app.clipboard.get_data()
+                            event.current_buffer.insert_text(data.text)
+                        except:
+                            pass  # Silent fail
+                else:
+                    # Fallback to prompt_toolkit's clipboard
                     try:
                         data = event.app.clipboard.get_data()
                         event.current_buffer.insert_text(data.text)
                     except:
-                        pass  # Silent fail - no clipboard content
-            else:
-                # Fallback to prompt_toolkit's clipboard if pyperclip not available
-                try:
-                    data = event.app.clipboard.get_data()
-                    event.current_buffer.insert_text(data.text)
-                except:
-                    pass
+                        pass
 
         return PromptSession(
             multiline=True,
@@ -247,44 +264,33 @@ class SessionOrchestrator:
                 # Track conversation
                 self.session_data['planning_discussion'] += f"\n{user_input}\n"
 
-                # Check for images (clipboard or paths)
+                # Check for images (from pasted placeholders or file paths in text)
                 image_paths = []
 
-                # Check clipboard only if user pressed Ctrl+V (paste_detected flag)
-                if self.paste_detected:
-                    clipboard_image = self._check_clipboard_for_image()
-                    if clipboard_image:
-                        console.print(f"[green]📸 Image detected in clipboard → {clipboard_image}[/green]")
-                        image_paths.append(clipboard_image)
-                    # Reset the flag after checking
-                    self.paste_detected = False
+                # Check for pasted images (from Ctrl+V)
+                if self.pasted_images:
+                    image_paths = [img['path'] for img in self.pasted_images]
+                    console.print(f"[green]📸 Sending {len(image_paths)} image(s) with your message[/green]")
 
-                # Check for image paths in text
+                # Check for image file paths mentioned in text
                 text_images = self._detect_image_paths(user_input)
                 if text_images:
                     for img_path in text_images:
-                        console.print(f"[green]📸 Image detected: {img_path}[/green]")
+                        console.print(f"[green]📸 Image path detected: {img_path}[/green]")
                         image_paths.append(img_path)
 
-                # If images detected, check for vision model
+                # If images detected, check for vision model and prepare to use it
+                vision_model = None
                 if image_paths:
                     vision_model = self._get_vision_model()
                     if vision_model:
-                        console.print(f"[cyan]🔄 Switching to {vision_model} for vision support[/cyan]\n")
-                        # Temporarily use vision model
-                        original_model = self.model
-                        self.model = vision_model
-                        # Add images to input (Ollama vision format)
-                        user_input = f"{user_input}\n\nImages to analyze: {', '.join(image_paths)}"
+                        console.print(f"[cyan]🔄 Using {vision_model} for vision support[/cyan]\n")
                     else:
                         console.print(f"[yellow]⚠️  No vision model found. Install with: ollama pull llava:7b[/yellow]\n")
+                        image_paths = []  # Can't use images without vision model
 
-                # Call Ollama
-                response = self._call_ollama(system_prompt, user_input)
-
-                # Restore original model if we switched
-                if image_paths and vision_model:
-                    self.model = original_model
+                # Call Ollama (with images if present)
+                response = self._call_ollama(system_prompt, user_input, image_paths, vision_model)
 
                 if response:
                     # Check for tool calls in response
@@ -566,64 +572,36 @@ OUTPUT: {result.output if result.output else result.error}
 
         return "\n".join(formatted)
 
-    def _call_ollama(self, system_prompt: str, user_input: str) -> Optional[str]:
-        """Call Ollama with live timer, ESC interrupt, and progress indicator"""
+    def _call_ollama(self, system_prompt: str, user_input: str, images: Optional[List[str]] = None, vision_model: Optional[str] = None) -> Optional[str]:
+        """Call Ollama with live timer, ESC interrupt, and optional image support"""
         try:
             # Start keyboard listener and reset ESC flag
             if KEYBOARD_AVAILABLE:
                 _start_keyboard_listener()
                 _reset_esc_flag()
 
-            # Combine system prompt with user input for first message
-            # Ollama doesn't have system role, so we prepend it
-            full_prompt = f"{system_prompt}\n\n---\n\nUser: {user_input}\n\nAssistant:"
-
             # Track timing
             start_time = time.time()
 
-            # Start subprocess (non-blocking)
-            process = subprocess.Popen(
-                ['ollama', 'run', self.model, full_prompt],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            # If images are provided, use Ollama Python library (supports images)
+            if images and vision_model:
+                import ollama as ollama_lib
 
-            # Live display with timer and ESC detection
-            with Live(console=console, refresh_per_second=4) as live:
-                while process.poll() is None:
-                    elapsed = int(time.time() - start_time)
+                # Build full message with system prompt
+                full_message = f"{system_prompt}\n\n---\n\n{user_input}"
 
-                    # Update display with timer
-                    display = Text()
-                    display.append("🤔 Thinking... ", style="cyan")
-                    display.append(f"{elapsed}s", style="yellow bold")
-                    if KEYBOARD_AVAILABLE:
-                        display.append(" (Press ESC to cancel)", style="dim")
-                    live.update(display)
+                # Use Ollama Python library for vision
+                response_text = ollama_lib.chat(
+                    model=vision_model,
+                    messages=[{
+                        'role': 'user',
+                        'content': full_message,
+                        'images': images  # List of file paths
+                    }]
+                )
 
-                    # Check for ESC key
-                    if KEYBOARD_AVAILABLE and _is_esc_pressed():
-                        console.print("\n\n[yellow]⚠️  Cancelled (ESC pressed)[/yellow]\n")
-                        process.terminate()
-                        try:
-                            process.wait(timeout=2)
-                        except:
-                            process.kill()
-                        _reset_esc_flag()  # Reset for next time
-                        return None
-
-                    time.sleep(0.25)
-
-            # Get output
-            stdout, stderr = process.communicate()
-            elapsed = time.time() - start_time
-
-            # Clear the live display
-            console.print()
-
-            if process.returncode == 0:
-                response = stdout.strip()
+                # Extract response text
+                elapsed = time.time() - start_time
 
                 # Track metrics
                 self.session_metrics['queries'] += 1
@@ -634,10 +612,78 @@ OUTPUT: {result.output if result.output else result.error}
                 })
                 self.last_query_time = elapsed
 
-                return response
+                # Clear pasted images after sending
+                if self.pasted_images:
+                    self.pasted_images = []
+
+                return response_text['message']['content']
+
             else:
-                console.print(f"[red]Ollama error: {stderr}[/red]")
-                return None
+                # Text-only: use CLI (existing code)
+                # Combine system prompt with user input
+                full_prompt = f"{system_prompt}\n\n---\n\nUser: {user_input}\n\nAssistant:"
+
+                # Start subprocess (non-blocking)
+                process = subprocess.Popen(
+                    ['ollama', 'run', self.model, full_prompt],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+
+                # Live display with timer and ESC detection
+                with Live(console=console, refresh_per_second=4) as live:
+                    while process.poll() is None:
+                        elapsed = int(time.time() - start_time)
+
+                        # Update display with timer
+                        display = Text()
+                        display.append("🤔 Thinking... ", style="cyan")
+                        display.append(f"{elapsed}s", style="yellow bold")
+                        if KEYBOARD_AVAILABLE:
+                            display.append(" (Press ESC to cancel)", style="dim")
+                        live.update(display)
+
+                        # Check for ESC key
+                        if KEYBOARD_AVAILABLE and _is_esc_pressed():
+                            console.print("\n\n[yellow]⚠️  Cancelled (ESC pressed)[/yellow]\n")
+                            process.terminate()
+                            try:
+                                process.wait(timeout=2)
+                            except:
+                                process.kill()
+                            _reset_esc_flag()  # Reset for next time
+                            return None
+
+                        time.sleep(0.25)
+
+                # Get output
+                stdout, stderr = process.communicate()
+                elapsed = time.time() - start_time
+
+                # Clear the live display
+                console.print()
+
+                if process.returncode == 0:
+                    response = stdout.strip()
+
+                    # Track metrics
+                    self.session_metrics['queries'] += 1
+                    self.session_metrics['total_time'] += elapsed
+                    self.session_metrics['responses'].append({
+                        'duration': elapsed,
+                        'timestamp': time.time()
+                    })
+                    self.last_query_time = elapsed
+
+                    # Clear pasted images after sending
+                    if self.pasted_images:
+                        self.pasted_images = []
+
+                    return response
+                else:
+                    console.print(f"[red]Ollama error: {stderr}[/red]")
+                    return None
 
         except FileNotFoundError:
             console.print("[red]Ollama not found. Is it installed?[/red]")

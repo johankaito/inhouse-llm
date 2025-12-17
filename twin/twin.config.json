@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "default_model": "fast",
+  "default_model": "ultrafast",
   "model_aliases": {
     "ultrafast": {
       "model": "qwen2.5-coder:1.5b-ultrafast",

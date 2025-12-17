@@ -2,21 +2,33 @@
   "version": "1.0",
   "default_model": "fast",
   "model_aliases": {
+    "ultrafast": {
+      "model": "qwen2.5-coder:1.5b-ultrafast",
+      "description": "Ultra-fast responses for simple tasks (3-5 sec)",
+      "speed": "40-60 tokens/sec",
+      "ram": "3-4GB"
+    },
     "fast": {
+      "model": "qwen2.5-coder:3b-fast",
+      "description": "Fast responses with good quality (5-8 sec)",
+      "speed": "30-40 tokens/sec",
+      "ram": "4-6GB"
+    },
+    "balanced": {
       "model": "qwen2.5-coder:7b",
-      "description": "Fast responses, great for most coding tasks",
+      "description": "Balanced quality and speed (previous fast)",
       "speed": "15-20 tokens/sec",
       "ram": "8-10GB"
     },
-    "balanced": {
+    "quality": {
       "model": "qwen2.5-coder:14b",
-      "description": "Balanced quality and speed",
+      "description": "High quality code generation",
       "speed": "8-12 tokens/sec",
       "ram": "15-18GB"
     },
-    "quality": {
+    "max": {
       "model": "qwen2.5-coder:32b",
-      "description": "Highest quality code generation",
+      "description": "Maximum quality code generation",
       "speed": "4-6 tokens/sec",
       "ram": "25-28GB"
     },

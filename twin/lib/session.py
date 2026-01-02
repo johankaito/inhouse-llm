@@ -998,6 +998,13 @@ Next Steps:
                 console.print(f"[green]✓ Tool registry reinitialized ({len(self.tool_registry.tools)} tools)[/green]")
             except Exception as e:
                 console.print(f"[red]✗ Failed to reinitialize tools: {e}[/red]")
+
+        # Refresh environment context snapshot after reload
+        try:
+            self.env_context = self._build_env_context(os.getcwd())
+            console.print(f"[green]✓ Environment context refreshed[/green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠ Failed to refresh environment context: {e}[/yellow]")
         
         console.print(f"\n[green]✅ Reload complete: {len(reloaded)} modules updated[/green]\n")
         

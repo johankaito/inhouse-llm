@@ -263,43 +263,48 @@ class SessionOrchestrator:
         self.messages = list(self.static_system_messages)
 
         # Main loop
+        current = self
         while True:
             try:
                 # Get user input with Alt+Enter support
                 console.print()  # Add newline before prompt
-                user_input = self.prompt_session.prompt(">>> ")
+                user_input = current.prompt_session.prompt(">>> ")
 
                 if not user_input.strip():
                     continue
 
                 # Check for multiline mode
                 if user_input.strip() == '/multiline':
-                    user_input = self._get_multiline_input()
+                    user_input = current._get_multiline_input()
                     if not user_input:
                         continue
 
                 # Handle commands
                 if user_input.startswith('/'):
-                    result = self._handle_command(user_input.strip())
+                    result = current._handle_command(user_input.strip())
                     if result == 'exit':
                         break
                     elif result == 'continue':
                         continue
+                    elif isinstance(result, SessionOrchestrator):
+                        # Swap orchestrator instance and continue loop
+                        current = result
+                        continue
                     # Otherwise continue to process as regular input
 
                 # Track conversation textually for saved context
-                self.session_data['planning_discussion'] += f"\n{user_input}\n"
+                current.session_data['planning_discussion'] += f"\n{user_input}\n"
 
                 # Check for images (from pasted placeholders or file paths in text)
                 image_paths = []
 
                 # Check for pasted images (from Ctrl+V)
-                if self.pasted_images:
-                    image_paths = [img['path'] for img in self.pasted_images]
+                if current.pasted_images:
+                    image_paths = [img['path'] for img in current.pasted_images]
                     console.print(f"[green]📸 Sending {len(image_paths)} image(s) with your message[/green]")
 
                 # Check for image file paths mentioned in text
-                text_images = self._detect_image_paths(user_input)
+                text_images = current._detect_image_paths(user_input)
                 if text_images:
                     for img_path in text_images:
                         console.print(f"[green]📸 Image path detected: {img_path}[/green]")
@@ -316,7 +321,7 @@ class SessionOrchestrator:
                         image_paths = []  # Can't use images without vision model
 
                 # Call Ollama (with images if present)
-                response = self._call_ollama(user_input, image_paths, vision_model)
+                response = current._call_ollama(user_input, image_paths, vision_model)
 
                 if response:
                     # Check for tool calls in response
@@ -826,7 +831,10 @@ OUTPUT: {result.output if result.output else result.error}
             return 'continue'
 
         elif cmd == 'reload':
-            self._reload_modules()
+            replacement = self._reload_modules()
+            if replacement:
+                # Return a sentinel to instruct caller to swap orchestrator
+                return replacement
             return 'continue'
 
         elif cmd == 'terminal-setup':
@@ -1017,6 +1025,66 @@ Next Steps:
         
         if failed:
             console.print(f"[yellow]⚠ {len(failed)} modules failed to reload[/yellow]\n")
+
+        # Attempt to rebuild SessionOrchestrator from reloaded module and migrate state
+        try:
+            import session as session_module
+            NewOrchestrator = session_module.SessionOrchestrator
+            if NewOrchestrator is self.__class__:
+                # Already current class, nothing to swap
+                return None
+
+            # Snapshot current state to transfer
+            state = {
+                'mode': self.mode,
+                'agent': self.agent,
+                'context': self.context,
+                'model': self.model,
+                'session_id': self.session_id,
+                'session_data': self.session_data,
+                'messages': self.messages,
+                'static_system_messages': self.static_system_messages,
+                'running_summary': self.running_summary,
+                'env_context': self.env_context,
+                'tool_registry': self.tool_registry,
+                'session_metrics': self.session_metrics,
+                'last_query_time': self.last_query_time,
+                'prompt_session': self.prompt_session,
+                'pasted_images': self.pasted_images,
+                'image_counter': self.image_counter,
+            }
+
+            # Build new instance
+            new_instance = NewOrchestrator(
+                config=self.config,
+                mode=self.mode,
+                agent=self.agent,
+                context=self.context,
+                model=self.model,
+                agent_loader=self.agent_loader,
+                mode_detector=self.mode_detector,
+                context_manager=self.context_manager
+            )
+
+            # Restore state
+            new_instance.session_id = state['session_id']
+            new_instance.session_data = state['session_data']
+            new_instance.messages = state['messages']
+            new_instance.static_system_messages = state['static_system_messages']
+            new_instance.running_summary = state['running_summary']
+            new_instance.env_context = state['env_context']
+            new_instance.tool_registry = state['tool_registry']
+            new_instance.session_metrics = state['session_metrics']
+            new_instance.last_query_time = state['last_query_time']
+            new_instance.prompt_session = state['prompt_session']
+            new_instance.pasted_images = state['pasted_images']
+            new_instance.image_counter = state['image_counter']
+
+            console.print("[green]✓ Swapped to reloaded SessionOrchestrator (state migrated)[/green]")
+            return new_instance
+        except Exception as e:
+            console.print(f"[yellow]⚠ Failed to hot-swap SessionOrchestrator: {e}[/yellow]")
+            return None
 
     def _setup_terminal(self):
         """Configure terminal for Shift+Enter support"""

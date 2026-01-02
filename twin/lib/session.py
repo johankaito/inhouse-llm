@@ -637,12 +637,33 @@ OUTPUT: {result.output if result.output else result.error}
             # Use Ollama Python library for chat (supports streaming and images)
             import ollama as ollama_lib
 
-            with console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
+            # Show live elapsed timer while thinking
+            stop_timer = False
+
+            def _timer():
+                with Live(console=console, refresh_per_second=4) as live:
+                    while not stop_timer:
+                        elapsed_sec = int(time.time() - start_time)
+                        display = Text()
+                        display.append("🤔 Thinking... ", style="cyan")
+                        display.append(f"{elapsed_sec}s", style="yellow bold")
+                        display.append(" (Ctrl+C to cancel)", style="dim")
+                        live.update(display)
+                        time.sleep(1)
+
+            timer_thread = threading.Thread(target=_timer, daemon=True)
+            timer_thread.start()
+
+            try:
                 response_text = ollama_lib.chat(
                     model=model_name,
                     messages=messages_for_call,
                     options=options
                 )
+            finally:
+                stop_timer = True
+                timer_thread.join(timeout=2)
+                console.print()
 
             elapsed = time.time() - start_time
 

@@ -804,9 +804,15 @@ OUTPUT: {result.output if result.output else result.error}
                     console.print("\n[yellow]Usage: /sessions delete <number>[/yellow]\n")
             elif subcmd == 'clear':
                 self._clear_sessions()
+            elif subcmd == 'resume':
+                try:
+                    index = int(subargs)
+                    self._resume_session(index)
+                except ValueError:
+                    console.print("\n[yellow]Usage: /sessions resume <number>[/yellow]\n")
             else:
                 console.print(f"\n[yellow]Unknown subcommand: {subcmd}[/yellow]")
-                console.print("[dim]Available: list, show, delete, clear[/dim]\n")
+                console.print("[dim]Available: list, show, delete, resume, clear[/dim]\n")
 
             return 'continue'
 
@@ -1111,6 +1117,7 @@ Next Steps:
         console.print("[dim]Commands:[/dim]")
         console.print("[dim]  /sessions show <num> - View full session content[/dim]")
         console.print("[dim]  /sessions delete <num> - Delete specific session[/dim]")
+        console.print("[dim]  /sessions resume <num> - Inject prior session context into this run[/dim]")
         console.print("[dim]  /sessions clear - Delete all sessions[/dim]\n")
 
     def _show_session(self, index: int):
@@ -1262,6 +1269,35 @@ Next Steps:
         if KEYBOARD_AVAILABLE:
             _reset_esc_flag()
         return result
+
+    def _resume_session(self, index: int):
+        """Inject a prior session's content into the current conversation"""
+        cwd = os.getcwd()
+        session = self.context_manager.get_session_by_index(cwd, index)
+
+        if not session:
+            console.print(f"\n[red]Session #{index} not found[/red]\n")
+            return
+
+        content = session.get('content', '')
+        truncated = self._summarize_text(content, max_chars=4000) if content else "(no content)"
+        stamp = session.get('timestamp', 'unknown')
+        mode = session.get('mode', 'personal')
+
+        resume_message = {
+            'role': 'system',
+            'content': f"Resuming from session #{index} ({stamp}, {mode} mode).\nPrior session content:\n{truncated}"
+        }
+
+        # Persist into static system messages and current buffer
+        self.static_system_messages.append(resume_message)
+        self.messages.append(resume_message)
+        self.running_summary = truncated
+
+        # Track in session data
+        self.session_data['planning_discussion'] += f"\n[Resumed session #{index}]\n"
+
+        console.print(f"\n[green]✓ Injected session #{index} into current context[/green]\n")
 
     def _check_clipboard_for_image(self) -> Optional[str]:
         """Check if clipboard contains an image, save to temp file"""

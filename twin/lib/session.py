@@ -116,6 +116,11 @@ class SessionOrchestrator:
 
         self.session_id = uuid.uuid4().hex[:8]
         self.conversation = []
+        # Static system messages are always included (prompts + prior summaries)
+        self.static_system_messages: List[Dict[str, Any]] = []
+        # Full message buffer for chat-based calls
+        self.messages: List[Dict[str, Any]] = []
+        self.running_summary: str = ""
         self.session_data = {
             'session_id': self.session_id,
             'mode': mode,
@@ -236,6 +241,18 @@ class SessionOrchestrator:
         # Build system prompt
         system_prompt = self._build_system_prompt()
 
+        # Seed message buffers
+        self.static_system_messages = [{'role': 'system', 'content': system_prompt}]
+
+        prior_context_summary = self._build_prior_context_summary(cwd)
+        if prior_context_summary:
+            self.static_system_messages.append({
+                'role': 'system',
+                'content': f"Prior context summary:\n{prior_context_summary}"
+            })
+
+        self.messages = list(self.static_system_messages)
+
         # Main loop
         while True:
             try:
@@ -261,7 +278,7 @@ class SessionOrchestrator:
                         continue
                     # Otherwise continue to process as regular input
 
-                # Track conversation
+                # Track conversation textually for saved context
                 self.session_data['planning_discussion'] += f"\n{user_input}\n"
 
                 # Check for images (from pasted placeholders or file paths in text)
@@ -290,7 +307,7 @@ class SessionOrchestrator:
                         image_paths = []  # Can't use images without vision model
 
                 # Call Ollama (with images if present)
-                response = self._call_ollama(system_prompt, user_input, image_paths, vision_model)
+                response = self._call_ollama(user_input, image_paths, vision_model)
 
                 if response:
                     # Check for tool calls in response
@@ -315,7 +332,7 @@ class SessionOrchestrator:
 {tool_results_text}
 
 Based on the above tool results, provide your complete response to the user's original question."""
-                        response = self._call_ollama("", followup_prompt)
+                        response = self._call_ollama(followup_prompt)
 
                         # Handle restart if needed
                         if requires_restart:
@@ -572,8 +589,8 @@ OUTPUT: {result.output if result.output else result.error}
 
         return "\n".join(formatted)
 
-    def _call_ollama(self, system_prompt: str, user_input: str, images: Optional[List[str]] = None, vision_model: Optional[str] = None) -> Optional[str]:
-        """Call Ollama with live timer, ESC interrupt, and optional image support"""
+    def _call_ollama(self, user_input: str, images: Optional[List[str]] = None, vision_model: Optional[str] = None) -> Optional[str]:
+        """Call Ollama with live timer, ESC interrupt, optional image support, and full history"""
         try:
             # Start keyboard listener and reset ESC flag
             if KEYBOARD_AVAILABLE:
@@ -582,108 +599,49 @@ OUTPUT: {result.output if result.output else result.error}
 
             # Track timing
             start_time = time.time()
+            # Build messages with new user input
+            self._append_user_message(user_input, images)
 
-            # If images are provided, use Ollama Python library (supports images)
-            if images and vision_model:
-                import ollama as ollama_lib
+            # Compact history if needed before sending
+            self._maybe_compact_messages()
 
-                # Build full message with system prompt
-                full_message = f"{system_prompt}\n\n---\n\n{user_input}"
+            # Build Ollama options from config
+            options = self._build_ollama_options()
 
-                # Use Ollama Python library for vision
-                response_text = ollama_lib.chat(
-                    model=vision_model,
-                    messages=[{
-                        'role': 'user',
-                        'content': full_message,
-                        'images': images  # List of file paths
-                    }]
-                )
+            # Choose model for this call (vision override if needed)
+            model_name = vision_model if (images and vision_model) else self.model
 
-                # Extract response text
-                elapsed = time.time() - start_time
+            # Use Ollama Python library for chat (supports streaming and images)
+            import ollama as ollama_lib
 
-                # Track metrics
-                self.session_metrics['queries'] += 1
-                self.session_metrics['total_time'] += elapsed
-                self.session_metrics['responses'].append({
-                    'duration': elapsed,
-                    'timestamp': time.time()
-                })
-                self.last_query_time = elapsed
+            response_text = ollama_lib.chat(
+                model=model_name,
+                messages=self.messages,
+                options=options
+            )
 
-                # Clear pasted images after sending
-                if self.pasted_images:
-                    self.pasted_images = []
+            elapsed = time.time() - start_time
 
-                return response_text['message']['content']
+            # Extract response text
+            assistant_reply = response_text['message']['content']
 
-            else:
-                # Text-only: use CLI (existing code)
-                # Combine system prompt with user input
-                full_prompt = f"{system_prompt}\n\n---\n\nUser: {user_input}\n\nAssistant:"
+            # Track metrics
+            self.session_metrics['queries'] += 1
+            self.session_metrics['total_time'] += elapsed
+            self.session_metrics['responses'].append({
+                'duration': elapsed,
+                'timestamp': time.time()
+            })
+            self.last_query_time = elapsed
 
-                # Start subprocess (non-blocking)
-                process = subprocess.Popen(
-                    ['ollama', 'run', self.model, full_prompt],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
+            # Clear pasted images after sending
+            if self.pasted_images:
+                self.pasted_images = []
 
-                # Live display with timer and ESC detection
-                with Live(console=console, refresh_per_second=4) as live:
-                    while process.poll() is None:
-                        elapsed = int(time.time() - start_time)
+            # Append assistant message to buffer
+            self.messages.append({'role': 'assistant', 'content': assistant_reply})
 
-                        # Update display with timer
-                        display = Text()
-                        display.append("🤔 Thinking... ", style="cyan")
-                        display.append(f"{elapsed}s", style="yellow bold")
-                        if KEYBOARD_AVAILABLE:
-                            display.append(" (Press ESC to cancel)", style="dim")
-                        live.update(display)
-
-                        # Check for ESC key
-                        if KEYBOARD_AVAILABLE and _is_esc_pressed():
-                            console.print("\n\n[yellow]⚠️  Cancelled (ESC pressed)[/yellow]\n")
-                            process.terminate()
-                            try:
-                                process.wait(timeout=2)
-                            except:
-                                process.kill()
-                            _reset_esc_flag()  # Reset for next time
-                            return None
-
-                        time.sleep(0.25)
-
-                # Get output
-                stdout, stderr = process.communicate()
-                elapsed = time.time() - start_time
-
-                # Clear the live display
-                console.print()
-
-                if process.returncode == 0:
-                    response = stdout.strip()
-
-                    # Track metrics
-                    self.session_metrics['queries'] += 1
-                    self.session_metrics['total_time'] += elapsed
-                    self.session_metrics['responses'].append({
-                        'duration': elapsed,
-                        'timestamp': time.time()
-                    })
-                    self.last_query_time = elapsed
-
-                    # Clear pasted images after sending
-                    if self.pasted_images:
-                        self.pasted_images = []
-
-                    return response
-                else:
-                    console.print(f"[red]Ollama error: {stderr}[/red]")
-                    return None
+            return assistant_reply
 
         except FileNotFoundError:
             console.print("[red]Ollama not found. Is it installed?[/red]")
@@ -870,6 +828,9 @@ OUTPUT: {result.output if result.output else result.error}
     def _save_session(self):
         """Save session to context file"""
         cwd = os.getcwd()
+        # Persist running summary if available
+        if self.running_summary and 'reasoning' in self.session_data:
+            self.session_data['reasoning'] = f"Running summary:\n{self.running_summary}"
         self.context_manager.append_session(cwd, self.session_data)
 
         # Show session summary if had queries
@@ -1294,3 +1255,113 @@ Next Steps:
         except:
             pass
         return None
+
+    def _build_prior_context_summary(self, cwd: str) -> str:
+        """Summarize recent sessions for initial system message"""
+        recent_sessions = self.context_manager.get_recent_sessions(cwd, count=2) or []
+        if not recent_sessions:
+            return ""
+
+        parts = []
+        for session in recent_sessions:
+            topic = self._extract_topic_from_session_content(session.get('content', ''))
+            parts.append(f"- {session.get('timestamp', '')}: {topic}")
+
+        summary = "\n".join(parts)
+        return summary[:800] + ("..." if len(summary) > 800 else "")
+
+    def _extract_topic_from_session_content(self, content: str) -> str:
+        """Lightweight topic extraction (first non-empty line of planning discussion)"""
+        planning_match = re.search(r'### Planning Discussion\n(.+?)(?=\n###|\Z)', content, re.DOTALL)
+        if planning_match:
+            line = planning_match.group(1).strip().split('\n')[0]
+            return line[:120] + ("..." if len(line) > 120 else "")
+        # Fallback to first non-empty line
+        for line in content.splitlines():
+            clean = line.strip()
+            if clean:
+                return clean[:120] + ("..." if len(clean) > 120 else "")
+        return "(no topic)"
+
+    def _append_user_message(self, user_input: str, images: Optional[List[str]] = None) -> None:
+        """Add user message to buffer with optional images"""
+        message: Dict[str, Any] = {'role': 'user', 'content': user_input}
+        if images:
+            message['images'] = images
+        # Recreate message list each turn to ensure static system messages are preserved
+        dynamic_messages = [m for m in self.messages if m not in self.static_system_messages]
+        self.messages = list(self.static_system_messages) + dynamic_messages + [message]
+
+    def _build_ollama_options(self) -> Dict[str, Any]:
+        """Build Ollama generation options from config"""
+        twin_config = self.config.get('twin_config', {})
+        generation_params = twin_config.get('generation_params', {})
+        ollama_cfg = twin_config.get('ollama', {})
+
+        options: Dict[str, Any] = {}
+        if 'temperature' in generation_params:
+            options['temperature'] = generation_params['temperature']
+        if 'top_p' in generation_params:
+            options['top_p'] = generation_params['top_p']
+        if 'num_ctx' in generation_params:
+            options['num_ctx'] = generation_params['num_ctx']
+        elif 'context_window' in ollama_cfg:
+            options['num_ctx'] = ollama_cfg['context_window']
+        if 'keep_alive' in ollama_cfg:
+            options['keep_alive'] = ollama_cfg['keep_alive']
+
+        return options
+
+    def _estimate_char_count(self, messages: List[Dict[str, Any]]) -> int:
+        """Approximate size of the conversation in characters"""
+        return sum(len(m.get('content', '')) for m in messages)
+
+    def _summarize_text(self, text: str, max_chars: int = 800) -> str:
+        """Simple deterministic summarization by keeping leading lines and truncating"""
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not lines:
+            return ""
+
+        # Keep first 6 lines and the last 2 lines for recency
+        head = lines[:6]
+        tail = lines[-2:] if len(lines) > 8 else []
+        merged = head + (["..."] if tail else []) + tail
+        summary = "\n".join(merged)
+        return summary[:max_chars] + ("..." if len(summary) > max_chars else "")
+
+    def _maybe_compact_messages(self) -> None:
+        """Compact conversation into a running summary when nearing context limits"""
+        twin_config = self.config.get('twin_config', {})
+        ollama_cfg = twin_config.get('ollama', {})
+        generation_params = twin_config.get('generation_params', {})
+
+        num_ctx = generation_params.get('num_ctx') or ollama_cfg.get('context_window', 32768)
+        max_chars = int(num_ctx * 4)  # rough character budget
+        compact_threshold = int(max_chars * 0.7)
+
+        current_chars = self._estimate_char_count(self.messages)
+        if current_chars <= compact_threshold:
+            return
+
+        # Protect the most recent messages (last 6)
+        protected = 6
+        static_len = len(self.static_system_messages)
+        if len(self.messages) <= static_len + protected:
+            return
+
+        dynamic_messages = self.messages[static_len:]
+        old_messages = dynamic_messages[:-protected]
+        recent_messages = dynamic_messages[-protected:]
+
+        combined_text = "\n".join(m.get('content', '') for m in old_messages)
+        summary_text = self._summarize_text(combined_text, max_chars=1000)
+
+        if summary_text:
+            summary_message = {
+                'role': 'system',
+                'content': f"Conversation so far (summarized):\n{summary_text}"
+            }
+            # Update running summary for saving
+            self.running_summary = summary_text
+            # Rebuild messages: static + summary + recent
+            self.messages = list(self.static_system_messages) + [summary_message] + recent_messages

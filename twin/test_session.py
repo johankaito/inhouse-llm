@@ -122,6 +122,127 @@ def test_image_detection():
         print(f"  ❌ Image detection failed: {e}")
         return False
 
+def test_build_ollama_options():
+    """Ensure generation params map correctly into Ollama options"""
+    print("\nTesting Ollama option builder...")
+    try:
+        from session import SessionOrchestrator
+
+        config = {
+            'twin_config': {
+                'generation_params': {
+                    'temperature': 0.3,
+                    'top_p': 0.8,
+                    'num_ctx': 256
+                },
+                'ollama': {
+                    'keep_alive': '5m'
+                },
+                'model_aliases': {}
+            }
+        }
+
+        class MockLoader:
+            def get_agent(self, name):
+                return {'name': name, 'master_prompt': 'test'}
+
+        class MockManager:
+            def get_context_summary(self, path):
+                return "Test context"
+            def get_recent_sessions(self, path, count=2):
+                return []
+            def append_session(self, path, data):
+                pass
+
+        orchestrator = SessionOrchestrator(
+            config=config,
+            mode='personal',
+            agent={'name': 'test-agent', 'master_prompt': 'test'},
+            context=None,
+            model='qwen2.5-coder:7b',
+            agent_loader=MockLoader(),
+            mode_detector=object(),
+            context_manager=MockManager()
+        )
+
+        opts = orchestrator._build_ollama_options()
+        assert opts['temperature'] == 0.3
+        assert opts['top_p'] == 0.8
+        assert opts['num_ctx'] == 256
+        assert opts['keep_alive'] == '5m'
+        print("  ✅ Options mapped correctly:", opts)
+        return True
+    except Exception as e:
+        print(f"  ❌ Ollama option builder failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_message_compaction():
+    """Verify message buffer compacts with running summary when large"""
+    print("\nTesting message compaction...")
+    try:
+        from session import SessionOrchestrator
+
+        config = {
+            'twin_config': {
+                'generation_params': {
+                    'num_ctx': 120  # small to force compaction
+                },
+                'model_aliases': {}
+            }
+        }
+
+        class MockLoader:
+            def get_agent(self, name):
+                return {'name': name, 'master_prompt': 'test'}
+
+        class MockManager:
+            def get_context_summary(self, path):
+                return "Test context"
+            def get_recent_sessions(self, path, count=2):
+                return []
+            def append_session(self, path, data):
+                pass
+
+        orchestrator = SessionOrchestrator(
+            config=config,
+            mode='personal',
+            agent={'name': 'test-agent', 'master_prompt': 'test'},
+            context=None,
+            model='qwen2.5-coder:7b',
+            agent_loader=MockLoader(),
+            mode_detector=object(),
+            context_manager=MockManager()
+        )
+
+        system_prompt = orchestrator._build_system_prompt()
+        orchestrator.static_system_messages = [{'role': 'system', 'content': system_prompt}]
+        orchestrator.messages = list(orchestrator.static_system_messages)
+
+        # Add enough messages to exceed compact threshold
+        for i in range(12):
+            orchestrator._append_user_message(f"message {i} " + ("x" * 50))
+            orchestrator.messages.append({'role': 'assistant', 'content': f"reply {i} " + ("y" * 40)})
+
+        before_len = len(orchestrator.messages)
+        orchestrator._maybe_compact_messages()
+        after_len = len(orchestrator.messages)
+
+        assert after_len < before_len, "Compaction should reduce message count"
+        assert orchestrator.running_summary, "Running summary should be stored"
+        summary_msg = next((m for m in orchestrator.messages if m.get('role') == 'system' and 'Conversation so far' in m.get('content', '')), None)
+        assert summary_msg, "Summary system message should be present"
+
+        print(f"  ✅ Compacted from {before_len} to {after_len} messages")
+        print(f"  ✅ Running summary length: {len(orchestrator.running_summary)} chars")
+        return True
+    except Exception as e:
+        print(f"  ❌ Message compaction failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def run_all_tests():
     """Run all tests and report results"""
     print("=" * 60)
@@ -135,6 +256,8 @@ def run_all_tests():
     results.append(("Key Bindings", test_key_bindings()))
     results.append(("Clipboard Access", test_clipboard_access()))
     results.append(("Image Detection", test_image_detection()))
+    results.append(("Ollama Options", test_build_ollama_options()))
+    results.append(("Message Compaction", test_message_compaction()))
 
     # Summary
     print("\n" + "=" * 60)

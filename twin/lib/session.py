@@ -1348,19 +1348,38 @@ Next Steps:
             return
 
         content = session.get('content', '')
-        truncated = self._summarize_text(content, max_chars=4000) if content else "(no content)"
         stamp = session.get('timestamp', 'unknown')
         mode = session.get('mode', 'personal')
+        topic = session.get('topic') or self._extract_topic_from_session_content(content)
+
+        planning_match = re.search(r'### Planning Discussion\n(.+?)(?=\n###|\Z)', content, re.DOTALL)
+        planning_block = planning_match.group(1).strip() if planning_match else ""
+
+        # Build a concise summary
+        summary_lines = [
+            f"Resuming from session #{index} ({stamp}, {mode} mode).",
+            f"Topic: {topic}" if topic else "Topic: (unknown)"
+        ]
+        if planning_block:
+            summary_lines.append("Planning discussion summary:")
+            summary_lines.append(self._summarize_text(planning_block, max_chars=1200))
+        else:
+            summary_lines.append("Planning discussion summary: (not found)")
+
+        truncated = self._summarize_text(content, max_chars=2000) if content else "(no content)"
+        summary_lines.append("Excerpt:")
+        summary_lines.append(truncated)
 
         resume_message = {
             'role': 'system',
-            'content': f"Resuming from session #{index} ({stamp}, {mode} mode).\nPrior session content:\n{truncated}"
+            'content': "\n".join(summary_lines)
         }
 
         # Persist into static system messages and current buffer
         self.static_system_messages.append(resume_message)
         self.messages.append(resume_message)
-        self.running_summary = truncated
+        self.running_summary = "\n".join(summary_lines)
+        self.session_data['reasoning'] = self.running_summary
 
         # Track in session data
         self.session_data['planning_discussion'] += f"\n[Resumed session #{index}]\n"

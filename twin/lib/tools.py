@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import glob as glob_module
+import socket
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable
 from urllib.parse import quote_plus
@@ -81,6 +82,7 @@ class ToolRegistry:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.tools = {}
         self.config = config or {}
+        self.offline = self._detect_offline()
         self._register_core_tools()
         self._register_online_tools()
         self._register_github_tools()
@@ -825,10 +827,26 @@ class ToolRegistry:
         path_str = str(path)
         return any(pattern in path_str for pattern in ignore_patterns)
 
+    def _detect_offline(self) -> bool:
+        """
+        Quick network probe to decide whether to register online tools.
+        Uses a fast TCP connect to 1.1.1.1:443 (configurable via env).
+        """
+        host = os.getenv("TWIN_NETWORK_TEST_HOST", "1.1.1.1")
+        port = int(os.getenv("TWIN_NETWORK_TEST_PORT", "443"))
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return False
+        except OSError:
+            return True
+
     # Online resource tools
 
     def _register_online_tools(self):
         """Register online resource tools (web search, fetch)"""
+        if self.offline:
+            return
+
         if DDGS_AVAILABLE:
             self.register(Tool(
                 name="web_search",
@@ -942,6 +960,9 @@ class ToolRegistry:
 
     def _register_github_tools(self):
         """Register GitHub API tools"""
+        if self.offline:
+            return
+
         if not GITHUB_AVAILABLE:
             return
 

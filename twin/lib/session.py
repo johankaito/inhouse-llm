@@ -121,6 +121,7 @@ class SessionOrchestrator:
         # Full message buffer for chat-based calls
         self.messages: List[Dict[str, Any]] = []
         self.running_summary: str = ""
+        self.env_context: str = ""
         self.session_data = {
             'session_id': self.session_id,
             'mode': mode,
@@ -233,10 +234,18 @@ class SessionOrchestrator:
         """Run interactive session"""
         cwd = os.getcwd()
 
+        # Reject non-interactive stdin to avoid hanging when piped without a TTY
+        if not sys.stdin.isatty():
+            console.print("[yellow]⚠️  Twin requires an interactive terminal (TTY). Please run directly in a shell.[/yellow]")
+            return
+
         # Display context summary if available
         if self.context:
             summary = self.context_manager.get_context_summary(cwd)
             console.print(f"\n[dim]{summary}[/dim]\n")
+
+        # Build environment context snapshot (cwd, git, readme, files)
+        self.env_context = self._build_env_context(cwd)
 
         # Build system prompt
         system_prompt = self._build_system_prompt()
@@ -462,6 +471,10 @@ The improvement will be:
                 ])
                 prompt_parts.append(f"\n\nPrevious Context:\n{context_summary}")
 
+        # Add environment context (cwd, git, files, README)
+        if self.env_context:
+            prompt_parts.append(f"\n\nEnvironment Context:\n{self.env_context}")
+
         return "\n\n".join(prompt_parts)
 
     def _get_tool_instructions(self) -> str:
@@ -508,6 +521,10 @@ Then continue your response based on the tool result.
 - Always use tools when you need to interact with files or the system
 - Don't make assumptions about file contents - read them first
 - Be precise with file paths
+
+**Environment awareness:**
+- You are running from the working directory shown in Environment Context.
+- When asked about current directory, files, or project purpose, use Environment Context first; if more detail is needed, call `bash`/`glob`/`read` to inspect.
 """
 
     def _parse_tool_calls(self, response: str) -> List[Dict[str, Any]]:
@@ -620,11 +637,12 @@ OUTPUT: {result.output if result.output else result.error}
             # Use Ollama Python library for chat (supports streaming and images)
             import ollama as ollama_lib
 
-            response_text = ollama_lib.chat(
-                model=model_name,
-                messages=messages_for_call,
-                options=options
-            )
+            with console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
+                response_text = ollama_lib.chat(
+                    model=model_name,
+                    messages=messages_for_call,
+                    options=options
+                )
 
             elapsed = time.time() - start_time
 
@@ -736,6 +754,12 @@ OUTPUT: {result.output if result.output else result.error}
             console.print(f"\n[cyan]{summary}[/cyan]\n")
             return 'continue'
 
+        elif cmd == 'env':
+            console.print("\n[cyan]Environment Context:[/cyan]")
+            console.print(self.env_context or "No environment context available")
+            console.print()
+            return 'continue'
+
         elif cmd == 'sessions':
             # Parse subcommand
             subparts = args.split(maxsplit=1) if args else []
@@ -807,6 +831,7 @@ OUTPUT: {result.output if result.output else result.error}
 - `/agent <name>` - Switch to a different agent
 - `/model <alias>` - Switch model (fast/balanced/quality/reasoning or full name)
 - `/context` - Show context summary
+- `/env` - Show current working directory, git info, README summary, and top files
 - `/save` - Manually save session checkpoint
 - `/edit` - Transition to Aider for implementation
 - `/reload` - Reload twin modules (after manual code changes)
@@ -1262,6 +1287,47 @@ Next Steps:
         except:
             pass
         return None
+
+    def _build_env_context(self, cwd: str) -> str:
+        """Construct an environment snapshot for the system prompt"""
+        parts = []
+
+        # CWD and basic listing
+        parts.append(f"CWD: {cwd}")
+
+        try:
+            entries = sorted(os.listdir(cwd))[:20]
+            parts.append("Top-level entries (max 20): " + ", ".join(entries))
+        except Exception as e:
+            parts.append(f"Top-level entries: <error: {e}>")
+
+        # Git info if available
+        try:
+            git_root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], cwd=cwd, text=True).strip()
+            branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=cwd, text=True).strip()
+            status = subprocess.check_output(['git', 'status', '--short'], cwd=cwd, text=True).strip()
+            status_display = status if status else "clean"
+            parts.append(f"Git repo: {git_root}")
+            parts.append(f"Branch: {branch}, Status: {status_display}")
+        except Exception:
+            parts.append("Git: not a repository or unavailable")
+
+        # README summary if present
+        readme_path = None
+        for name in ["README.md", "README"]:
+            candidate = Path(cwd) / name
+            if candidate.exists():
+                readme_path = candidate
+                break
+        if readme_path:
+            try:
+                text = readme_path.read_text(errors='ignore')
+                summary = self._summarize_text(text, max_chars=800)
+                parts.append(f"README summary ({readme_path.name}):\n{summary}")
+            except Exception as e:
+                parts.append(f"README summary error: {e}")
+
+        return "\n".join(parts)
 
     def _build_prior_context_summary(self, cwd: str) -> str:
         """Summarize recent sessions for initial system message"""

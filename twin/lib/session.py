@@ -267,7 +267,9 @@ class SessionOrchestrator:
             # Track conversation textually for saving
             self.session_data['planning_discussion'] += f"\n{user_input}\n"
 
-            response = self._call_ollama(user_input)
+            augmented = self._augment_with_env(user_input)
+
+            response = self._call_ollama(augmented)
             if response:
                 console.print()
                 console.print(Markdown(response))
@@ -334,7 +336,9 @@ class SessionOrchestrator:
                         image_paths = []  # Can't use images without vision model
 
                 # Call Ollama (with images if present)
-                response = current._call_ollama(user_input, image_paths, vision_model)
+                augmented_input = current._augment_with_env(user_input)
+
+                response = current._call_ollama(augmented_input, image_paths, vision_model)
 
                 if response:
                     # Check for tool calls in response
@@ -1398,6 +1402,22 @@ Next Steps:
         self.session_data['planning_discussion'] += f"\n[Resumed session #{index}]\n"
 
         console.print(f"\n[green]✓ Injected session #{index} into current context[/green]\n")
+
+    def _augment_with_env(self, user_input: str) -> str:
+        """Auto-append environment snapshot when the user asks about cwd/files/project"""
+        lowered = user_input.lower()
+        triggers = [
+            "what directory", "current directory", "pwd", "where am i",
+            "what files", "list files", "show files", "what's here",
+            "what is this project about", "what's this project about",
+            "project about", "what repository"
+        ]
+        if not any(t in lowered for t in triggers):
+            return user_input
+
+        info = self.env_context or self._build_env_context(os.getcwd())
+        console.print("[dim]↪ Injecting environment context for this question[/dim]")
+        return f"{user_input}\n\n[Auto context]\n{info}"
 
     def _check_clipboard_for_image(self) -> Optional[str]:
         """Check if clipboard contains an image, save to temp file"""

@@ -268,6 +268,7 @@ class SessionOrchestrator:
             self.session_data['planning_discussion'] += f"\n{user_input}\n"
 
             augmented = self._augment_with_env(user_input)
+            augmented = self._augment_with_tools(augmented)
 
             response = self._call_ollama(augmented)
             if response:
@@ -335,9 +336,11 @@ class SessionOrchestrator:
                         console.print(f"[yellow]⚠️  No vision model found. Install with: ollama pull llava:7b[/yellow]\n")
                         image_paths = []  # Can't use images without vision model
 
-                # Call Ollama (with images if present)
+                # Auto-augment with env and tool context
                 augmented_input = current._augment_with_env(user_input)
+                augmented_input = current._augment_with_tools(augmented_input)
 
+                # Call Ollama (with images if present)
                 response = current._call_ollama(augmented_input, image_paths, vision_model)
 
                 if response:
@@ -1418,6 +1421,57 @@ Next Steps:
         info = self.env_context or self._build_env_context(os.getcwd())
         console.print("[dim]↪ Injecting environment context for this question[/dim]")
         return f"{user_input}\n\n[Auto context]\n{info}"
+
+    def _augment_with_tools(self, user_input: str) -> str:
+        """Auto-run lightweight tools (pwd/ls/readme) for common env/file intents"""
+        lowered = user_input.lower()
+        intents = []
+        context_blocks = []
+
+        def add_block(title: str, content: str):
+            context_blocks.append(f"{title}:\n{content}")
+
+        try:
+            # Intent: current directory
+            if any(k in lowered for k in ["what directory", "current directory", "pwd", "where am i"]):
+                tool = self.tool_registry.get("bash")
+                if tool:
+                    res = tool.execute(command="pwd")
+                    if res.success and res.output:
+                        add_block("pwd", res.output.strip())
+
+            # Intent: list files
+            if any(k in lowered for k in ["what files", "list files", "show files", "what's here", "ls"]):
+                tool = self.tool_registry.get("bash")
+                if tool:
+                    res = tool.execute(command="ls -1 | head -n 50")
+                    if res.success and res.output:
+                        add_block("ls (top 50)", res.output.strip())
+
+            # Intent: project about / README
+            if any(k in lowered for k in ["what is this project about", "project about", "readme", "project summary"]):
+                readme = None
+                for name in ["README.md", "README"]:
+                    candidate = Path(os.getcwd()) / name
+                    if candidate.exists():
+                        readme = candidate
+                        break
+                if readme:
+                    try:
+                        text = readme.read_text(errors='ignore')
+                        summary = self._summarize_text(text, max_chars=1000)
+                        add_block(f"README ({readme.name})", summary)
+                    except Exception:
+                        pass
+        except Exception:
+            # Fail silently; do not block main flow
+            pass
+
+        if not context_blocks:
+            return user_input
+
+        console.print("[dim]↪ Added tool context (pwd/ls/readme) for this question[/dim]")
+        return f"{user_input}\n\n[Tool context]\n" + "\n\n".join(context_blocks)
 
     def _check_clipboard_for_image(self) -> Optional[str]:
         """Check if clipboard contains an image, save to temp file"""

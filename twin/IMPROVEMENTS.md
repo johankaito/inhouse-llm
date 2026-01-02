@@ -21,3 +21,15 @@ Each improvement includes:
 - Works in both interactive and one-shot modes; displays a dim note when injected.
 - Files changed: twin/lib/session.py
 - Commit: (see git history)
+
+---
+
+## Pending / Proposed Improvements (tracked for parity)
+
+| Status   | Item                                                              | Impact (relative) |
+|----------|-------------------------------------------------------------------|-------------------|
+| Pending  | Intent-driven tool use for env/file/code queries (auto pwd/ls/read) | 35%                |
+| Pending  | Smarter summaries (replace heuristic truncation with bulletizer/summarizer for running/context resume) | 25%                |
+| Pending  | Live model knobs via commands (/ctx to set num_ctx, /temp to set temperature) | 15%                |
+| Pending  | Non-TTY one-shot flag (-c \"prompt\") for clean single-shot without piping | 10%                |
+| Pending  | Tests for reload hot-swap, env snapshot presence, tool intent mapping | 15%                |

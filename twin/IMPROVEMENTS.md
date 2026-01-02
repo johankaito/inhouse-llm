@@ -28,8 +28,13 @@ Each improvement includes:
 
 | Status   | Item                                                              | Impact (relative) |
 |----------|-------------------------------------------------------------------|-------------------|
-| Pending  | Intent-driven tool use for env/file/code queries (auto pwd/ls/read) | 35%                |
+| Done     | Intent-driven tool use for env/file queries (auto pwd/ls/read) | 35%                |
 | Pending  | Smarter summaries (replace heuristic truncation with bulletizer/summarizer for running/context resume) | 25%                |
 | Pending  | Live model knobs via commands (/ctx to set num_ctx, /temp to set temperature) | 15%                |
 | Pending  | Non-TTY one-shot flag (-c \"prompt\") for clean single-shot without piping | 10%                |
 | Pending  | Tests for reload hot-swap, env snapshot presence, tool intent mapping | 15%                |
+
+## 2026-01-02 - Bulletized summaries
+- Replaced heuristic truncation with sentence-based bulletized summaries for running context and session resume, keeping outputs concise and readable.
+- Files changed: twin/lib/session.py
+- Commit: (see git history)

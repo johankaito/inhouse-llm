@@ -1619,17 +1619,34 @@ Next Steps:
         """Approximate size of the conversation in characters"""
         return sum(len(m.get('content', '')) for m in messages)
 
-    def _summarize_text(self, text: str, max_chars: int = 800) -> str:
-        """Simple deterministic summarization by keeping leading lines and truncating"""
+    def _summarize_text(self, text: str, max_chars: int = 800, max_items: int = 6) -> str:
+        """Deterministic bulletized summarization to keep context concise"""
+        # Split into sentences
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        bullets = []
+        total = 0
+        for sent in sentences:
+            s = sent.strip()
+            if not s:
+                continue
+            # Truncate long sentences
+            if len(s) > 200:
+                s = s[:200] + "..."
+            candidate_len = total + len(s) + 3  # account for "- "
+            if candidate_len > max_chars or len(bullets) >= max_items:
+                break
+            bullets.append(f"- {s}")
+            total = candidate_len
+
+        if bullets:
+            summary = "\n".join(bullets)
+            return summary[:max_chars]
+
+        # Fallback to trimmed lines if no sentences found
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         if not lines:
             return ""
-
-        # Keep first 6 lines and the last 2 lines for recency
-        head = lines[:6]
-        tail = lines[-2:] if len(lines) > 8 else []
-        merged = head + (["..."] if tail else []) + tail
-        summary = "\n".join(merged)
+        summary = "\n".join(lines[:max_items])
         return summary[:max_chars] + ("..." if len(summary) > max_chars else "")
 
     def _maybe_compact_messages(self) -> None:

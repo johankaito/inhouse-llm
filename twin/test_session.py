@@ -243,6 +243,66 @@ def test_message_compaction():
         traceback.print_exc()
         return False
 
+def test_resume_session_injection():
+    """Ensure /sessions resume injects a useful summary and updates buffers"""
+    print("\nTesting session resume injection...")
+    try:
+        from session import SessionOrchestrator
+
+        config = {'twin_config': {}}
+
+        class MockLoader:
+            def get_agent(self, name):
+                return {'name': name, 'master_prompt': 'test'}
+
+        class MockContextManager:
+            def get_context_summary(self, path):
+                return "Test context"
+            def get_recent_sessions(self, path, count=2):
+                return []
+            def append_session(self, path, data):
+                pass
+            def get_session_by_index(self, cwd, index):
+                return {
+                    'timestamp': '2026-01-02 11:09',
+                    'mode': 'personal',
+                    'content': "### Planning Discussion\nBuild finance dashboard\n\n### Agent Active\ndecision-framework\n---\n",
+                    'topic': 'Build finance dashboard'
+                }
+
+        orchestrator = SessionOrchestrator(
+            config=config,
+            mode='personal',
+            agent={'name': 'test-agent', 'master_prompt': 'test'},
+            context=None,
+            model='qwen2.5-coder:7b',
+            agent_loader=MockLoader(),
+            mode_detector=object(),
+            context_manager=MockContextManager()
+        )
+
+        # Seed minimal system messages to avoid index errors
+        orchestrator.static_system_messages = [{'role': 'system', 'content': 'base'}]
+        orchestrator.messages = list(orchestrator.static_system_messages)
+
+        orchestrator._resume_session(1)
+
+        system_msgs = [m for m in orchestrator.messages if m.get('role') == 'system']
+        injected = [m for m in system_msgs if "Resuming from session #1" in m.get('content', '')]
+
+        assert injected, "Resume summary system message should be present"
+        assert "Topic:" in injected[0]['content'], "Resume summary should include topic"
+        assert orchestrator.running_summary, "Running summary should be set"
+        assert orchestrator.session_data.get('reasoning'), "Reasoning should be populated from running summary"
+
+        print("  ✅ Resume injected summary and updated reasoning")
+        return True
+    except Exception as e:
+        print(f"  ❌ Session resume injection failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def run_all_tests():
     """Run all tests and report results"""
     print("=" * 60)
@@ -258,6 +318,7 @@ def run_all_tests():
     results.append(("Image Detection", test_image_detection()))
     results.append(("Ollama Options", test_build_ollama_options()))
     results.append(("Message Compaction", test_message_compaction()))
+    results.append(("Session Resume", test_resume_session_injection()))
 
     # Summary
     print("\n" + "=" * 60)

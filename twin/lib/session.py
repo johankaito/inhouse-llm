@@ -599,11 +599,17 @@ OUTPUT: {result.output if result.output else result.error}
 
             # Track timing
             start_time = time.time()
-            # Build messages with new user input
-            self._append_user_message(user_input, images)
 
-            # Compact history if needed before sending
+            # Compact history if needed before adding new turn
             self._maybe_compact_messages()
+
+            # Build user message
+            user_message: Dict[str, Any] = {'role': 'user', 'content': user_input}
+            if images:
+                user_message['images'] = images
+
+            # Build final message list for this call (do not mutate yet)
+            messages_for_call = list(self.messages) + [user_message]
 
             # Build Ollama options from config
             options = self._build_ollama_options()
@@ -616,7 +622,7 @@ OUTPUT: {result.output if result.output else result.error}
 
             response_text = ollama_lib.chat(
                 model=model_name,
-                messages=self.messages,
+                messages=messages_for_call,
                 options=options
             )
 
@@ -638,7 +644,8 @@ OUTPUT: {result.output if result.output else result.error}
             if self.pasted_images:
                 self.pasted_images = []
 
-            # Append assistant message to buffer
+            # Persist messages to buffer for next turn
+            self.messages.append(user_message)
             self.messages.append({'role': 'assistant', 'content': assistant_reply})
 
             return assistant_reply
@@ -1282,15 +1289,6 @@ Next Steps:
             if clean:
                 return clean[:120] + ("..." if len(clean) > 120 else "")
         return "(no topic)"
-
-    def _append_user_message(self, user_input: str, images: Optional[List[str]] = None) -> None:
-        """Add user message to buffer with optional images"""
-        message: Dict[str, Any] = {'role': 'user', 'content': user_input}
-        if images:
-            message['images'] = images
-        # Recreate message list each turn to ensure static system messages are preserved
-        dynamic_messages = [m for m in self.messages if m not in self.static_system_messages]
-        self.messages = list(self.static_system_messages) + dynamic_messages + [message]
 
     def _build_ollama_options(self) -> Dict[str, Any]:
         """Build Ollama generation options from config"""

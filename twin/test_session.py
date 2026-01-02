@@ -222,7 +222,7 @@ def test_message_compaction():
 
         # Add enough messages to exceed compact threshold
         for i in range(12):
-            orchestrator._append_user_message(f"message {i} " + ("x" * 50))
+            orchestrator.messages.append({'role': 'user', 'content': f"message {i} " + ("x" * 50)})
             orchestrator.messages.append({'role': 'assistant', 'content': f"reply {i} " + ("y" * 40)})
 
         before_len = len(orchestrator.messages)

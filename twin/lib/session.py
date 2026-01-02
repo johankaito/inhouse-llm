@@ -636,6 +636,7 @@ OUTPUT: {result.output if result.output else result.error}
 
             # Use Ollama Python library for chat (supports streaming and images)
             import ollama as ollama_lib
+            import threading  # ensure available for timer
 
             # Show live elapsed timer while thinking
             stop_timer = False

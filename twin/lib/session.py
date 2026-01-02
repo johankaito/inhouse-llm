@@ -234,11 +234,6 @@ class SessionOrchestrator:
         """Run interactive session"""
         cwd = os.getcwd()
 
-        # Reject non-interactive stdin to avoid hanging when piped without a TTY
-        if not sys.stdin.isatty():
-            console.print("[yellow]⚠️  Twin requires an interactive terminal (TTY). Please run directly in a shell.[/yellow]")
-            return
-
         # Display context summary if available
         if self.context:
             summary = self.context_manager.get_context_summary(cwd)
@@ -261,6 +256,24 @@ class SessionOrchestrator:
             })
 
         self.messages = list(self.static_system_messages)
+
+        # Handle non-interactive (piped) mode as one-shot
+        if not sys.stdin.isatty():
+            user_input = sys.stdin.read().strip()
+            if not user_input:
+                console.print("[yellow]⚠️  No input provided on stdin. Provide a prompt via piping.[/yellow]")
+                return
+
+            # Track conversation textually for saving
+            self.session_data['planning_discussion'] += f"\n{user_input}\n"
+
+            response = self._call_ollama(user_input)
+            if response:
+                console.print()
+                console.print(Markdown(response))
+                self.session_data['planning_discussion'] += f"\n{response}\n"
+                self._save_session()
+            return
 
         # Main loop
         current = self

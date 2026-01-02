@@ -29,12 +29,22 @@ Each improvement includes:
 | Status   | Item                                                              | Impact (relative) |
 |----------|-------------------------------------------------------------------|-------------------|
 | Done     | Intent-driven tool use for env/file queries (auto pwd/ls/read) | 35%                |
-| Pending  | Smarter summaries (replace heuristic truncation with bulletizer/summarizer for running/context resume) | 25%                |
-| Pending  | Live model knobs via commands (/ctx to set num_ctx, /temp to set temperature) | 15%                |
-| Pending  | Non-TTY one-shot flag (-c \"prompt\") for clean single-shot without piping | 10%                |
+| Done     | Smarter summaries (replace heuristic truncation with bulletizer/summarizer for running/context resume) | 25%                |
+| Done     | Live model knobs via commands (/ctx to set num_ctx, /temp to set temperature) | 15%                |
+| Done     | Non-TTY one-shot flag (-c \"prompt\") for clean single-shot without piping | 10%                |
 | Pending  | Tests for reload hot-swap, env snapshot presence, tool intent mapping | 15%                |
 
 ## 2026-01-02 - Bulletized summaries
 - Replaced heuristic truncation with sentence-based bulletized summaries for running context and session resume, keeping outputs concise and readable.
 - Files changed: twin/lib/session.py
+- Commit: (see git history)
+
+## 2026-01-02 - Live model knobs
+- Added `/ctx` and `/temp` commands to set num_ctx and temperature at runtime (stored in generation_params for the session).
+- Files changed: twin/lib/session.py
+- Commit: (see git history)
+
+## 2026-01-02 - CLI one-shot flag
+- Added `-c/--command` flag to twin CLI to accept a one-shot prompt without piping stdin; still saves the session.
+- Files changed: twin/bin/twin
 - Commit: (see git history)

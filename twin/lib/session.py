@@ -796,6 +796,39 @@ OUTPUT: {result.output if result.output else result.error}
                 console.print(f"\n[dim]Current model: {self.model}[/dim]\n")
             return 'continue'
 
+        elif cmd == 'ctx':
+            if args:
+                try:
+                    num_ctx = int(args)
+                    if num_ctx < 512:
+                        console.print("[yellow]⚠️  num_ctx too small; set >= 512[/yellow]\n")
+                        return 'continue'
+                    # Update in twin_config for this session
+                    self.config.setdefault('twin_config', {}).setdefault('generation_params', {})['num_ctx'] = num_ctx
+                    console.print(f"[green]✓ Set num_ctx to {num_ctx}[/green]\n")
+                except ValueError:
+                    console.print("[yellow]Usage: /ctx <num_ctx>[/yellow]\n")
+            else:
+                gp = self.config.get('twin_config', {}).get('generation_params', {})
+                console.print(f"\n[cyan]Current num_ctx:[/cyan] {gp.get('num_ctx', 'default')}\n")
+            return 'continue'
+
+        elif cmd == 'temp':
+            if args:
+                try:
+                    temp = float(args)
+                    if temp < 0 or temp > 1.5:
+                        console.print("[yellow]⚠️  temp out of expected range (0..1.5)[/yellow]\n")
+                        return 'continue'
+                    self.config.setdefault('twin_config', {}).setdefault('generation_params', {})['temperature'] = temp
+                    console.print(f"[green]✓ Set temperature to {temp}[/green]\n")
+                except ValueError:
+                    console.print("[yellow]Usage: /temp <value>[/yellow]\n")
+            else:
+                gp = self.config.get('twin_config', {}).get('generation_params', {})
+                console.print(f"\n[cyan]Current temperature:[/cyan] {gp.get('temperature', 'default')}\n")
+            return 'continue'
+
         elif cmd == 'context':
             summary = self.context_manager.get_context_summary(os.getcwd())
             console.print(f"\n[cyan]{summary}[/cyan]\n")
@@ -887,6 +920,8 @@ OUTPUT: {result.output if result.output else result.error}
 - `/agent <name>` - Switch to a different agent
 - `/model <alias>` - Switch model (fast/balanced/quality/reasoning or full name)
 - `/context` - Show context summary
+- `/ctx <num>` - Set num_ctx for this session (context window)
+- `/temp <value>` - Set temperature for this session
 - `/env` - Show current working directory, git info, README summary, and top files
 - `/save` - Manually save session checkpoint
 - `/edit` - Transition to Aider for implementation

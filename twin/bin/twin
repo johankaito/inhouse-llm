@@ -32,7 +32,8 @@ console = Console()
 @click.option('--agent', help='Start with specific agent')
 @click.option('--model', default=None, help='Ollama model or alias (fast/balanced/quality/reasoning)')
 @click.option('--no-context', is_flag=True, help='Ignore previous context')
-def main(mode, agent, model, no_context):
+@click.option('-c', '--command', 'command_prompt', default=None, help='One-shot prompt for non-interactive mode')
+def main(mode, agent, model, no_context, command_prompt):
     """twin - Digital Twin Local Planning Mode"""
 
     try:
@@ -112,7 +113,13 @@ def main(mode, agent, model, no_context):
             context_manager=context_manager
         )
 
-        orchestrator.run()
+        if command_prompt:
+            # Feed prompt via stdin-style path
+            import io
+            sys.stdin = io.StringIO(command_prompt)
+            orchestrator.run()
+        else:
+            orchestrator.run()
 
     except KeyboardInterrupt:
         console.print("\n\n✋ [yellow]Session cancelled[/yellow]")

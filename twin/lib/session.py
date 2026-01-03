@@ -122,6 +122,7 @@ class SessionOrchestrator:
         self.messages: List[Dict[str, Any]] = []
         self.running_summary: str = ""
         self.env_context: str = ""
+        self.repo_index: List[Dict[str, Any]] = []
         self.session_data = {
             'session_id': self.session_id,
             'mode': mode,
@@ -241,6 +242,7 @@ class SessionOrchestrator:
 
         # Build environment context snapshot (cwd, git, readme, files)
         self.env_context = self._build_env_context(cwd)
+        self.repo_index = self._build_repo_index(cwd)
 
         # Build system prompt
         system_prompt = self._build_system_prompt()
@@ -269,6 +271,7 @@ class SessionOrchestrator:
 
             augmented = self._augment_with_env(user_input)
             augmented = self._augment_with_tools(augmented)
+            augmented = self._augment_with_repo(augmented)
 
             response = self._call_ollama(augmented)
             if response:
@@ -339,6 +342,7 @@ class SessionOrchestrator:
                 # Auto-augment with env and tool context
                 augmented_input = current._augment_with_env(user_input)
                 augmented_input = current._augment_with_tools(augmented_input)
+                augmented_input = current._augment_with_repo(augmented_input)
 
                 # Call Ollama (with images if present)
                 response = current._call_ollama(augmented_input, image_paths, vision_model)
@@ -1107,6 +1111,7 @@ Next Steps:
                 'prompt_session': self.prompt_session,
                 'pasted_images': self.pasted_images,
                 'image_counter': self.image_counter,
+                'repo_index': self.repo_index,
             }
 
             # Build new instance
@@ -1134,6 +1139,7 @@ Next Steps:
             new_instance.prompt_session = state['prompt_session']
             new_instance.pasted_images = state['pasted_images']
             new_instance.image_counter = state['image_counter']
+            new_instance.repo_index = state.get('repo_index', [])
 
             console.print("[green]✓ Swapped to reloaded SessionOrchestrator (state migrated)[/green]")
             return new_instance
@@ -1507,6 +1513,95 @@ Next Steps:
 
         console.print("[dim]↪ Added tool context (pwd/ls/readme) for this question[/dim]")
         return f"{user_input}\n\n[Tool context]\n" + "\n\n".join(context_blocks)
+
+    def _build_repo_index(self, cwd: str) -> List[Dict[str, Any]]:
+        """Create a lightweight repo index for retrieval (bounded, no embeddings)"""
+        index = []
+        patterns = [
+            "README*",
+            "readme*",
+            "bin/twin",
+            "twin/lib/*.py",
+            "*.md"
+        ]
+        seen_files = set()
+        max_files = 40
+        max_chunks = 200
+        chunk_size_lines = 12
+
+        for pattern in patterns:
+            paths = list(Path(cwd).glob(pattern))
+            for path in paths:
+                if len(seen_files) >= max_files:
+                    break
+                if not path.exists() or not path.is_file():
+                    continue
+                try:
+                    text = path.read_text(errors='ignore')
+                except Exception:
+                    continue
+                seen_files.add(path)
+                lines = text.splitlines()
+                for i in range(0, len(lines), chunk_size_lines):
+                    if len(index) >= max_chunks:
+                        break
+                    chunk_lines = lines[i:i+chunk_size_lines]
+                    chunk_text = "\n".join(chunk_lines).strip()
+                    if not chunk_text:
+                        continue
+                    index.append({
+                        'file': str(path.relative_to(cwd)),
+                        'start_line': i + 1,
+                        'text': chunk_text
+                    })
+        return index
+
+    def _retrieve_repo_context(self, query: str, max_chunks: int = 3) -> List[Dict[str, Any]]:
+        """Retrieve top repo chunks based on simple token overlap"""
+        if not self.repo_index:
+            return []
+
+        tokens = re.findall(r'\w+', query.lower())
+        token_set = set(tokens)
+        if not token_set:
+            return []
+
+        scored = []
+        for chunk in self.repo_index:
+            chunk_tokens = set(re.findall(r'\w+', chunk['text'].lower()))
+            score = len(token_set.intersection(chunk_tokens))
+            # slight boost for filename matches
+            if any(t in chunk['file'].lower() for t in token_set):
+                score += 1
+            if score > 0:
+                scored.append((score, chunk))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [c for _, c in scored[:max_chunks]]
+
+    def _augment_with_repo(self, user_input: str) -> str:
+        """Append retrieved repo context with citations when query seems repo-related"""
+        lowered = user_input.lower()
+        triggers = [
+            "where is", "find", "implementation", "code", "function", "class",
+            "how does", "what does", "project", "repo", "file", "readme"
+        ]
+        if not any(t in lowered for t in triggers):
+            return user_input
+
+        hits = self._retrieve_repo_context(user_input, max_chunks=3)
+        if not hits:
+            return user_input
+
+        lines = ["[Repo context with citations]"]
+        for h in hits:
+            snippet = h['text']
+            snippet = snippet[:800] + ("..." if len(snippet) > 800 else "")
+            lines.append(f"- {h['file']}:{h['start_line']} — {snippet}")
+
+        context_block = "\n".join(lines)
+        console.print("[dim]↪ Injecting repo context (cited) for this question[/dim]")
+        return f"{user_input}\n\n{context_block}"
 
     def _check_clipboard_for_image(self) -> Optional[str]:
         """Check if clipboard contains an image, save to temp file"""

@@ -32,7 +32,7 @@ Each improvement includes:
 | Done     | Smarter summaries (replace heuristic truncation with bulletizer/summarizer for running/context resume) | 25%                |
 | Done     | Live model knobs via commands (/ctx to set num_ctx, /temp to set temperature) | 15%                |
 | Done     | Non-TTY one-shot flag (-c \"prompt\") for clean single-shot without piping | 10%                |
-| Pending  | Repo-aware retrieval (bounded mini-RAG over repo/README/entrypoints) | 25%                |
+| Done     | Repo-aware retrieval (bounded mini-RAG over repo/README/entrypoints with cited snippets) | 25%                |
 | Pending  | Citation-style answers (file/line anchors where info was found) | 20%                |
 | Pending  | Tests for reload hot-swap, env snapshot presence, tool intent mapping | 10%                |
 | Pending  | Expand intent tools to code navigation (find symbols/paths automatically) | 10%                |
@@ -52,4 +52,9 @@ Each improvement includes:
 ## 2026-01-02 - CLI one-shot flag
 - Added `-c/--command` flag to twin CLI to accept a one-shot prompt without piping stdin; still saves the session.
 - Files changed: twin/bin/twin
+- Commit: (see git history)
+
+## 2026-01-02 - Repo-aware retrieval
+- Added lightweight repo index (README, key entrypoints) with token-overlap retrieval and cited snippets auto-injected into prompts for repo/code questions.
+- Files changed: twin/lib/session.py
 - Commit: (see git history)

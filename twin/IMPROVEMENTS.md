@@ -32,7 +32,12 @@ Each improvement includes:
 | Done     | Smarter summaries (replace heuristic truncation with bulletizer/summarizer for running/context resume) | 25%                |
 | Done     | Live model knobs via commands (/ctx to set num_ctx, /temp to set temperature) | 15%                |
 | Done     | Non-TTY one-shot flag (-c \"prompt\") for clean single-shot without piping | 10%                |
-| Pending  | Tests for reload hot-swap, env snapshot presence, tool intent mapping | 15%                |
+| Pending  | Repo-aware retrieval (bounded mini-RAG over repo/README/entrypoints) | 25%                |
+| Pending  | Citation-style answers (file/line anchors where info was found) | 20%                |
+| Pending  | Tests for reload hot-swap, env snapshot presence, tool intent mapping | 10%                |
+| Pending  | Expand intent tools to code navigation (find symbols/paths automatically) | 10%                |
+| Pending  | Safety/harmlessness rails (refusal rules, sensitive-path guardrails; inspired by Claude’s constitutional AI focus) | 15%                |
+| Pending  | Sandboxed/tool safety (timeouts, partial outputs, avoid outbound network by default; similar to Codex CLI sandbox) | 10%                |
 
 ## 2026-01-02 - Bulletized summaries
 - Replaced heuristic truncation with sentence-based bulletized summaries for running context and session resume, keeping outputs concise and readable.

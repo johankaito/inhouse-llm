@@ -123,6 +123,7 @@ class SessionOrchestrator:
         self.running_summary: str = ""
         self.env_context: str = ""
         self.repo_index: List[Dict[str, Any]] = []
+        self.last_repo_context: List[str] = []
         self.session_data = {
             'session_id': self.session_id,
             'mode': mode,
@@ -243,6 +244,7 @@ class SessionOrchestrator:
         # Build environment context snapshot (cwd, git, readme, files)
         self.env_context = self._build_env_context(cwd)
         self.repo_index = self._build_repo_index(cwd)
+        self.last_repo_context = []
 
         # Build system prompt
         system_prompt = self._build_system_prompt()
@@ -276,8 +278,9 @@ class SessionOrchestrator:
             response = self._call_ollama(augmented)
             if response:
                 console.print()
-                console.print(Markdown(response))
-                self.session_data['planning_discussion'] += f"\n{response}\n"
+                final_response = self._append_sources(response)
+                console.print(Markdown(final_response))
+                self.session_data['planning_discussion'] += f"\n{final_response}\n"
                 self._save_session()
             return
 
@@ -379,6 +382,7 @@ Based on the above tool results, provide your complete response to the user's or
                     if response:
                         # Display final response (strip out any remaining tool call markers)
                         clean_response = re.sub(r'TOOL_CALL:.*?ARGS:.*?\}', '', response, flags=re.DOTALL)
+                        clean_response = current._append_sources(clean_response)
                         console.print()
                         console.print(Markdown(clean_response))
 
@@ -550,6 +554,7 @@ Then continue your response based on the tool result.
 - Always use tools when you need to interact with files or the system
 - Don't make assumptions about file contents - read them first
 - Be precise with file paths
+- When repo context is provided, answer from that context and cite sources as file:line
 
 **Environment awareness:**
 - You are running from the working directory shown in Environment Context.
@@ -1111,8 +1116,9 @@ Next Steps:
                 'prompt_session': self.prompt_session,
                 'pasted_images': self.pasted_images,
                 'image_counter': self.image_counter,
-                'repo_index': self.repo_index,
-            }
+            'repo_index': self.repo_index,
+            'last_repo_context': self.last_repo_context,
+        }
 
             # Build new instance
             new_instance = NewOrchestrator(
@@ -1140,6 +1146,7 @@ Next Steps:
             new_instance.pasted_images = state['pasted_images']
             new_instance.image_counter = state['image_counter']
             new_instance.repo_index = state.get('repo_index', [])
+            new_instance.last_repo_context = state.get('last_repo_context', [])
 
             console.print("[green]✓ Swapped to reloaded SessionOrchestrator (state migrated)[/green]")
             return new_instance
@@ -1591,6 +1598,7 @@ Next Steps:
 
         hits = self._retrieve_repo_context(user_input, max_chunks=3)
         if not hits:
+            self.last_repo_context = []
             return user_input
 
         lines = ["[Repo context with citations]"]
@@ -1599,9 +1607,18 @@ Next Steps:
             snippet = snippet[:800] + ("..." if len(snippet) > 800 else "")
             lines.append(f"- {h['file']}:{h['start_line']} — {snippet}")
 
+        self.last_repo_context = lines[1:]
+
         context_block = "\n".join(lines)
         console.print("[dim]↪ Injecting repo context (cited) for this question[/dim]")
         return f"{user_input}\n\n{context_block}"
+
+    def _append_sources(self, response_text: str) -> str:
+        """Append sources from last_repo_context to the response if available"""
+        if not self.last_repo_context:
+            return response_text
+        sources_block = "\nSources:\n" + "\n".join(self.last_repo_context)
+        return f"{response_text.strip()}\n\n{sources_block}"
 
     def _check_clipboard_for_image(self) -> Optional[str]:
         """Check if clipboard contains an image, save to temp file"""

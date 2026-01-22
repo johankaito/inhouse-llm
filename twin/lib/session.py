@@ -10,6 +10,7 @@ import subprocess
 import re
 import json
 import time
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -513,12 +514,19 @@ The improvement will be:
     def _get_tool_instructions(self) -> str:
         """Generate tool calling instructions for prompt"""
         tool_list = self.tool_registry.list_tools()
+        tool_schemas = self.tool_registry.get_tool_schemas()
 
         tool_descriptions = []
         for tool in tool_list:
             args_str = ", ".join(f"{k}: {v}" for k, v in tool['args'].items())
             tool_descriptions.append(
                 f"**{tool['name']}({args_str})**\n   {tool['description']}"
+            )
+
+        schema_descriptions = []
+        for schema in tool_schemas:
+            schema_descriptions.append(
+                f"- {schema['name']}: required={schema['required_args'] or '[]'}, optional={schema['optional_args'] or '[]'}"
             )
 
         return f"""
@@ -528,11 +536,21 @@ You have access to these tools to help complete tasks:
 
 {chr(10).join(tool_descriptions)}
 
-To use a tool, output in this EXACT format:
+Preferred structured format (JSON):
+```
+{{"tool_calls":[{{"name":"tool_name","args":{{"arg1":"value1"}}}}]}}
+```
+- Use only the args listed for the tool (see schemas below).
+- Multiple tools: add multiple objects in tool_calls.
+
+Legacy fallback format is still accepted:
 ```
 TOOL_CALL: tool_name
 ARGS: {{"arg1": "value1", "arg2": "value2"}}
 ```
+
+Schemas (for validation):
+{chr(10).join(schema_descriptions)}
 
 After tool execution, you'll receive:
 ```
@@ -562,10 +580,60 @@ Then continue your response based on the tool result.
 """
 
     def _parse_tool_calls(self, response: str) -> List[Dict[str, Any]]:
-        """Parse tool calls from model response"""
+        """Parse tool calls from model response (prefers structured JSON, falls back to legacy)"""
+        structured = self._parse_structured_tool_calls(response)
+        if structured:
+            return structured
+        return self._parse_legacy_tool_calls(response)
+
+    def _parse_structured_tool_calls(self, response: str) -> List[Dict[str, Any]]:
+        """Parse JSON structured tool_calls blocks"""
+        candidates = []
+
+        # Look for fenced JSON blocks first
+        fence_pattern = r"```json(.*?)```"
+        for match in re.finditer(fence_pattern, response, re.DOTALL | re.IGNORECASE):
+            block = match.group(1).strip()
+            if block:
+                candidates.append(block)
+
+        # Fallback: look for first JSON object containing "tool_calls"
+        if not candidates:
+            braces = re.search(r'\{.*"tool_calls".*\}', response, re.DOTALL)
+            if braces:
+                candidates.append(braces.group(0))
+
+        tool_calls: List[Dict[str, Any]] = []
+
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+
+            calls = data.get("tool_calls") if isinstance(data, dict) else None
+            if not isinstance(calls, list):
+                continue
+
+            for call in calls:
+                name = call.get("name")
+                args = call.get("args", {})
+                if not name or not isinstance(args, dict):
+                    continue
+                errors = self.tool_registry.validate_args(name, args)
+                if errors:
+                    console.print(f"[yellow]Tool validation warning for {name}: {'; '.join(errors)}[/yellow]")
+                tool_calls.append({"tool": name, "args": args})
+
+            if tool_calls:
+                break  # prefer the first valid block
+
+        return tool_calls
+
+    def _parse_legacy_tool_calls(self, response: str) -> List[Dict[str, Any]]:
+        """Parse legacy TOOL_CALL / ARGS blocks as fallback"""
         tool_calls = []
 
-        # Pattern to match TOOL_CALL and ARGS blocks
         pattern = r'TOOL_CALL:\s*(\w+)\s*\nARGS:\s*(\{[^}]+\})'
 
         matches = re.finditer(pattern, response, re.MULTILINE | re.DOTALL)
@@ -576,6 +644,9 @@ Then continue your response based on the tool result.
 
             try:
                 args = json.loads(args_str)
+                errors = self.tool_registry.validate_args(tool_name, args)
+                if errors:
+                    console.print(f"[yellow]Tool validation warning for {tool_name}: {'; '.join(errors)}[/yellow]")
                 tool_calls.append({
                     'tool': tool_name,
                     'args': args
@@ -624,6 +695,10 @@ Then continue your response based on the tool result.
                     error=str(e)
                 ))
 
+        # Run post-edit checks if we modified files
+        if self._should_run_post_checks(results):
+            self._run_post_edit_checks()
+
         return results
 
     def _format_tool_results(self, results: List[ToolResult]) -> str:
@@ -639,6 +714,51 @@ OUTPUT: {result.output if result.output else result.error}
 """)
 
         return "\n".join(formatted)
+
+    def _should_run_post_checks(self, results: List[ToolResult]) -> bool:
+        """Detect whether any tool changed files and should trigger post-edit checks"""
+        for r in results:
+            if not r.success:
+                continue
+            if isinstance(r.metadata, dict) and r.metadata.get('file_path'):
+                return True
+        return False
+
+    def _run_post_edit_checks(self) -> None:
+        """Run lightweight post-edit validation (lint/tests) when safe to do so"""
+        cwd = os.getcwd()
+        commands: List[List[str]] = []
+
+        package_json = Path(cwd) / "package.json"
+        node_modules = Path(cwd) / "node_modules"
+        if package_json.exists() and node_modules.exists() and shutil.which("npm"):
+            commands.append(["npm", "test", "--", "--runInBand"])
+
+        pytest_ini = Path(cwd) / "pytest.ini"
+        pyproject = Path(cwd) / "pyproject.toml"
+        tests_dir = Path(cwd) / "tests"
+        if shutil.which("pytest") and (pytest_ini.exists() or tests_dir.exists() or (pyproject.exists() and "pytest" in pyproject.read_text(errors="ignore"))):
+            commands.append(["python3", "-m", "pytest", "-q"])
+
+        if not commands:
+            console.print("[dim]No post-edit checks detected (npm/pytest). Skipping.[/dim]")
+            return
+
+        for cmd in commands:
+            try:
+                with console.status(f"[cyan]Running {' '.join(cmd)}...", spinner="dots"):
+                    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    console.print(f"[green]✓ {' '.join(cmd)}[/green]")
+                else:
+                    output = result.stdout
+                    if result.stderr:
+                        output += f"\n[stderr]\n{result.stderr}"
+                    console.print(f"[red]✗ {' '.join(cmd)} failed (code {result.returncode})[/red]\n{output}")
+            except subprocess.TimeoutExpired:
+                console.print(f"[yellow]⚠️  {' '.join(cmd)} timed out (300s)[/yellow]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️  Unable to run {' '.join(cmd)}: {e}[/yellow]")
 
     def _call_ollama(self, user_input: str, images: Optional[List[str]] = None, vision_model: Optional[str] = None) -> Optional[str]:
         """Call Ollama with live timer, ESC interrupt, optional image support, and full history"""
@@ -665,8 +785,8 @@ OUTPUT: {result.output if result.output else result.error}
             # Build Ollama options from config
             options = self._build_ollama_options()
 
-            # Choose model for this call (vision override if needed)
-            model_name = vision_model if (images and vision_model) else self.model
+            # Choose model for this call (vision override if needed, otherwise router/alias)
+            model_name = vision_model if (images and vision_model) else self._resolve_model_name()
 
             # Use Ollama Python library for chat (supports streaming and images)
             import ollama as ollama_lib
@@ -690,11 +810,27 @@ OUTPUT: {result.output if result.output else result.error}
             timer_thread.start()
 
             try:
-                response_text = ollama_lib.chat(
-                    model=model_name,
-                    messages=messages_for_call,
-                    options=options
-                )
+                stream_enabled = bool(self.config.get("twin_config", {}).get("generation_params", {}).get("stream", False))
+                if stream_enabled:
+                    response_chunks: List[str] = []
+                    for chunk in ollama_lib.chat(
+                        model=model_name,
+                        messages=messages_for_call,
+                        options=options,
+                        stream=True
+                    ):
+                        token = chunk.get("message", {}).get("content", "")
+                        if token:
+                            response_chunks.append(token)
+                            console.print(token, end="", highlight=False, overflow="ignore")
+                    console.print()
+                    response_text = {"message": {"content": "".join(response_chunks)}}
+                else:
+                    response_text = ollama_lib.chat(
+                        model=model_name,
+                        messages=messages_for_call,
+                        options=options
+                    )
             finally:
                 stop_timer = True
                 timer_thread.join(timeout=2)
@@ -1761,6 +1897,18 @@ Next Steps:
             options['keep_alive'] = ollama_cfg['keep_alive']
 
         return options
+
+    def _resolve_model_name(self) -> str:
+        """Resolve model alias based on config, agent, and mode"""
+        twin_config = self.config.get('twin_config', {})
+        aliases = twin_config.get('model_aliases', {})
+        agent_pref = twin_config.get('agent_model_preferences', {}).get(self.agent.get('name', ''), None)
+        mode_default = twin_config.get('mode_defaults', {}).get(self.mode, None)
+
+        requested = self.model or agent_pref or mode_default
+        if requested in aliases:
+            return aliases[requested].get('model', requested)
+        return requested or "qwen2.5-coder:7b"
 
     def _estimate_char_count(self, messages: List[Dict[str, Any]]) -> int:
         """Approximate size of the conversation in characters"""

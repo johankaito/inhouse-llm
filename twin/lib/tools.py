@@ -9,6 +9,8 @@ import re
 import subprocess
 import glob as glob_module
 import socket
+import math
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable
 from urllib.parse import quote_plus
@@ -76,6 +78,25 @@ class Tool:
     def __repr__(self):
         return f"Tool({self.name})"
 
+    @property
+    def required_args(self) -> List[str]:
+        """Derive required args (anything not marked optional in schema description)"""
+        required = []
+        for arg, desc in self.args_schema.items():
+            if isinstance(desc, str) and "optional" in desc.lower():
+                continue
+            required.append(arg)
+        return required
+
+    @property
+    def optional_args(self) -> List[str]:
+        """Derive optional args (anything marked optional in schema description)"""
+        optional = []
+        for arg, desc in self.args_schema.items():
+            if isinstance(desc, str) and "optional" in desc.lower():
+                optional.append(arg)
+        return optional
+
 
 class ToolRegistry:
     """Registry for managing tools"""
@@ -87,6 +108,7 @@ class ToolRegistry:
         self._register_online_tools()
         self._register_github_tools()
         self._register_self_improvement_tool()
+        self._register_repo_tools()
 
     def register(self, tool: Tool):
         """Register a tool"""
@@ -115,6 +137,38 @@ class ToolRegistry:
             descriptions.append(f"{tool.name}({args_str})\n   {tool.description}")
         return "\n\n".join(descriptions)
 
+    def get_tool_schemas(self) -> List[Dict[str, Any]]:
+        """Structured schema summary for prompt and validation"""
+        schemas = []
+        for tool in self.tools.values():
+            schemas.append({
+                'name': tool.name,
+                'description': tool.description,
+                'required_args': tool.required_args,
+                'optional_args': tool.optional_args
+            })
+        return schemas
+
+    def validate_args(self, tool_name: str, args: Dict[str, Any]) -> List[str]:
+        """Validate args for known tool; returns list of error messages (empty when valid)"""
+        errors: List[str] = []
+        tool = self.get(tool_name)
+        if not tool:
+            errors.append(f"Unknown tool: {tool_name}")
+            return errors
+
+        # Missing required args
+        for required in tool.required_args:
+            if required not in args:
+                errors.append(f"Missing required arg '{required}' for tool '{tool_name}'")
+
+        # Unknown args
+        for provided in args.keys():
+            if provided not in tool.args_schema:
+                errors.append(f"Unknown arg '{provided}' for tool '{tool_name}'")
+
+        return errors
+
     def _register_core_tools(self):
         """Register core built-in tools"""
         # File operations
@@ -139,6 +193,13 @@ class ToolRegistry:
             args_schema={"file_path": "string", "old_string": "string", "new_string": "string"}
         ))
 
+        self.register(Tool(
+            name="apply_patch",
+            description="Apply a unified diff patch with --dry-run validation before writing. Fails if patch command is unavailable or patch does not apply cleanly.",
+            execute_fn=self._apply_patch,
+            args_schema={"patch": "string", "cwd": "string (optional, default '.')"}
+        ))
+
         # Shell operations
         self.register(Tool(
             name="bash",
@@ -160,6 +221,19 @@ class ToolRegistry:
             description="Search file contents for pattern using regex. Returns matching lines with context.",
             execute_fn=self._grep,
             args_schema={"pattern": "string", "path": "string (optional, default cwd)", "context": "int (optional, lines of context)"}
+        ))
+
+    def _register_repo_tools(self):
+        """Register repo-level helper tools"""
+        self.register(Tool(
+            name="repo_search",
+            description="Semantic-ish repo search with line-level citations. Uses Ollama embeddings if available (nomic-embed-text) and falls back to keyword scoring. Returns top snippets with path:start-end.",
+            execute_fn=self._repo_search,
+            args_schema={
+                "query": "string",
+                "path": "string (optional, default '.')",
+                "max_results": "int (optional, default 5)"
+            }
         ))
 
     # Tool implementations
@@ -649,6 +723,48 @@ class ToolRegistry:
         except Exception as e:
             return ToolResult(False, None, f"Error executing command: {e}")
 
+    def _apply_patch(self, patch: str, cwd: str = ".") -> ToolResult:
+        """Apply unified diff patch with dry-run first"""
+        patch_bin = shutil.which("patch")
+        if not patch_bin:
+            return ToolResult(False, None, "patch command not found on system")
+
+        try:
+            # Dry-run
+            dry_run = subprocess.run(
+                [patch_bin, "-p0", "--dry-run"],
+                input=patch,
+                text=True,
+                capture_output=True,
+                cwd=cwd
+            )
+            if dry_run.returncode != 0:
+                output = dry_run.stdout + "\n" + dry_run.stderr
+                return ToolResult(False, output, "Patch dry-run failed", metadata={"returncode": dry_run.returncode})
+
+            apply = subprocess.run(
+                [patch_bin, "-p0"],
+                input=patch,
+                text=True,
+                capture_output=True,
+                cwd=cwd
+            )
+            output = apply.stdout
+            if apply.stderr:
+                output += f"\n[stderr]\n{apply.stderr}"
+
+            metadata = {
+                "returncode": apply.returncode,
+                "cwd": str(Path(cwd).resolve())
+            }
+
+            if apply.returncode == 0:
+                return ToolResult(True, "Patch applied successfully", metadata=metadata)
+            return ToolResult(False, output, "Patch application failed", metadata=metadata)
+
+        except Exception as e:
+            return ToolResult(False, None, f"Error applying patch: {e}")
+
     def _glob(self, pattern: str, path: str = None) -> ToolResult:
         """Find files matching glob pattern"""
         try:
@@ -816,6 +932,139 @@ class ToolRegistry:
 
         except Exception as e:
             return ToolResult(False, None, f"Error searching: {e}")
+
+    def _repo_search(self, query: str, path: str = ".", max_results: int = 5) -> ToolResult:
+        """Semantic-ish repo search with embeddings (Ollama) and keyword fallback"""
+        try:
+            base = Path(path).expanduser()
+            if not base.exists():
+                return ToolResult(False, None, f"Path not found: {path}")
+
+            chunks = self._collect_repo_chunks(base)
+            if not chunks:
+                return ToolResult(False, None, "No text files found to index")
+
+            # Try embeddings via Ollama
+            use_embedding = False
+            query_vec = None
+            chunk_vecs = []
+            try:
+                import ollama as ollama_lib  # type: ignore
+                query_vec = self._embed_text(ollama_lib, query)
+                if query_vec:
+                    for ch in chunks:
+                        vec = self._embed_text(ollama_lib, ch["text"])
+                        if vec:
+                            chunk_vecs.append((ch, vec))
+                    use_embedding = query_vec is not None and len(chunk_vecs) > 0
+            except Exception:
+                use_embedding = False
+
+            scored = []
+            if use_embedding and query_vec:
+                for ch, vec in chunk_vecs:
+                    sim = self._cosine_similarity(query_vec, vec)
+                    scored.append((sim, ch))
+            else:
+                # Fallback keyword overlap
+                q_tokens = set(self._tokenize(query))
+                for ch in chunks:
+                    t_tokens = set(self._tokenize(ch["text"]))
+                    score = len(q_tokens & t_tokens) / (len(q_tokens) + 1e-6)
+                    scored.append((score, ch))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+            top = scored[:max_results]
+
+            lines = []
+            for rank, (score, ch) in enumerate(top, 1):
+                snippet = ch["text"][:240].replace("\n", " ")
+                lines.append(f"{rank}. {ch['path']}:{ch['start_line']}-{ch['end_line']} (score={score:.3f})\n    {snippet}")
+
+            output = "\n".join(lines)
+            metadata = {
+                "results": [
+                    {
+                        "path": ch["path"],
+                        "start_line": ch["start_line"],
+                        "end_line": ch["end_line"],
+                        "score": score
+                    }
+                    for score, ch in top
+                ],
+                "used_embedding": use_embedding
+            }
+            return ToolResult(True, output, metadata=metadata)
+
+        except Exception as e:
+            return ToolResult(False, None, f"Error during repo_search: {e}")
+
+    def _collect_repo_chunks(self, base: Path, max_files: int = 80, chunk_lines: int = 80, max_chars: int = 4000) -> List[Dict[str, Any]]:
+        """Collect text chunks with line numbers for indexing"""
+        allowed_exts = {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".rst", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".sh"}
+        ignored_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".idea", ".vscode"}
+
+        files: List[Path] = []
+        for path in base.rglob("*"):
+            if any(part in ignored_dirs for part in path.parts):
+                continue
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in allowed_exts:
+                continue
+            if path.stat().st_size > 500_000:
+                continue
+            files.append(path)
+            if len(files) >= max_files:
+                break
+
+        chunks: List[Dict[str, Any]] = []
+        for path in files:
+            try:
+                text = path.read_text(errors="ignore")
+            except Exception:
+                continue
+
+            lines = text.splitlines()
+            for i in range(0, len(lines), chunk_lines):
+                chunk_slice = lines[i:i + chunk_lines]
+                chunk_text = "\n".join(chunk_slice)
+                if len(chunk_text) > max_chars:
+                    chunk_text = chunk_text[:max_chars]
+                chunks.append({
+                    "path": str(path),
+                    "start_line": i + 1,
+                    "end_line": i + len(chunk_slice),
+                    "text": chunk_text
+                })
+
+        return chunks
+
+    def _embed_text(self, ollama_lib, text: str) -> Optional[List[float]]:
+        """Embed text using Ollama embeddings"""
+        try:
+            response = ollama_lib.embeddings(model="nomic-embed-text", prompt=text)
+            vec = response.get("embedding")
+            if isinstance(vec, list) and vec:
+                return vec
+        except Exception:
+            return None
+        return None
+
+    def _cosine_similarity(self, a: List[float], b: List[float]) -> float:
+        """Compute cosine similarity between two vectors"""
+        if len(a) != len(b) or not a:
+            return 0.0
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(y * y for y in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Lightweight tokenizer for fallback scoring"""
+        return re.findall(r"[A-Za-z0-9_]+", text.lower())
 
     def _should_ignore(self, path: Path) -> bool:
         """Check if file should be ignored in search"""

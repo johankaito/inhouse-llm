@@ -6,6 +6,7 @@ Replicates Claude Code planning experience with local LLMs
 
 import sys
 import os
+import subprocess
 from pathlib import Path
 
 # Add lib directory to path (resolve symlinks)
@@ -33,7 +34,8 @@ console = Console()
 @click.option('--model', default=None, help='Ollama model or alias (fast/balanced/quality/reasoning)')
 @click.option('--no-context', is_flag=True, help='Ignore previous context')
 @click.option('-c', '--command', 'command_prompt', default=None, help='One-shot prompt for non-interactive mode')
-def main(mode, agent, model, no_context, command_prompt):
+@click.option('--warm', is_flag=True, help='Warm the selected model before starting (reduces first-token latency)')
+def main(mode, agent, model, no_context, command_prompt, warm):
     """twin - Digital Twin Local Planning Mode"""
 
     try:
@@ -76,6 +78,10 @@ def main(mode, agent, model, no_context, command_prompt):
 
         # Use validated model
         model = resolved_model
+
+        # Warm model if requested
+        if warm:
+            _warm_model(model)
 
         # Detect mode
         mode_detector = ModeDetector(config)
@@ -156,6 +162,24 @@ def display_banner(mode, agent, context, model):
     banner_text += "\n\n[dim]Type your question or /help for commands[/dim]"
 
     console.print(Panel(banner_text, border_style=mode_color))
+
+
+def _warm_model(model: str) -> None:
+    """Perform a tiny chat call to keep the model loaded"""
+    try:
+        result = subprocess.run(
+            ["ollama", "chat", "-m", model],
+            input=".",
+            text=True,
+            capture_output=True,
+            timeout=30
+        )
+        if result.returncode == 0:
+            console.print(f"[dim]Warmed model: {model}[/dim]")
+        else:
+            console.print(f"[yellow]⚠️  Warm-up failed for {model} (code {result.returncode})[/yellow]")
+    except Exception as e:
+        console.print(f"[yellow]⚠️  Warm-up skipped: {e}[/yellow]")
 
 
 if __name__ == "__main__":

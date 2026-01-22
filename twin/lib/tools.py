@@ -104,6 +104,9 @@ class ToolRegistry:
         self.tools = {}
         self.config = config or {}
         self.offline = self._detect_offline()
+        self._embed_cache: Dict[str, List[float]] = {}
+        self._embed_cache_order: List[str] = []
+        self._embed_cache_max = 500
         self._register_core_tools()
         self._register_online_tools()
         self._register_github_tools()
@@ -944,7 +947,7 @@ class ToolRegistry:
             if not chunks:
                 return ToolResult(False, None, "No text files found to index")
 
-            # Try embeddings via Ollama
+            # Try embeddings via Ollama (cached by file+range+mtime)
             use_embedding = False
             query_vec = None
             chunk_vecs = []
@@ -953,7 +956,12 @@ class ToolRegistry:
                 query_vec = self._embed_text(ollama_lib, query)
                 if query_vec:
                     for ch in chunks:
-                        vec = self._embed_text(ollama_lib, ch["text"])
+                        cache_key = self._chunk_cache_key(ch)
+                        vec = self._embed_cache_get(cache_key)
+                        if not vec:
+                            vec = self._embed_text(ollama_lib, ch["text"])
+                            if vec:
+                                self._embed_cache_put(cache_key, vec)
                         if vec:
                             chunk_vecs.append((ch, vec))
                     use_embedding = query_vec is not None and len(chunk_vecs) > 0
@@ -1035,7 +1043,8 @@ class ToolRegistry:
                     "path": str(path),
                     "start_line": i + 1,
                     "end_line": i + len(chunk_slice),
-                    "text": chunk_text
+                    "text": chunk_text,
+                    "mtime": path.stat().st_mtime
                 })
 
         return chunks
@@ -1065,6 +1074,28 @@ class ToolRegistry:
     def _tokenize(self, text: str) -> List[str]:
         """Lightweight tokenizer for fallback scoring"""
         return re.findall(r"[A-Za-z0-9_]+", text.lower())
+
+    def _chunk_cache_key(self, chunk: Dict[str, Any]) -> str:
+        """Build a stable cache key for a chunk"""
+        return f"{chunk['path']}:{chunk['start_line']}:{chunk['end_line']}:{chunk.get('mtime', 0)}"
+
+    def _embed_cache_get(self, key: str) -> Optional[List[float]]:
+        """LRU-ish lookup"""
+        vec = self._embed_cache.get(key)
+        if vec:
+            # move to end
+            if key in self._embed_cache_order:
+                self._embed_cache_order.remove(key)
+            self._embed_cache_order.append(key)
+        return vec
+
+    def _embed_cache_put(self, key: str, vec: List[float]) -> None:
+        """Store with simple LRU eviction"""
+        self._embed_cache[key] = vec
+        self._embed_cache_order.append(key)
+        if len(self._embed_cache_order) > self._embed_cache_max:
+            oldest = self._embed_cache_order.pop(0)
+            self._embed_cache.pop(oldest, None)
 
     def _should_ignore(self, path: Path) -> bool:
         """Check if file should be ignored in search"""

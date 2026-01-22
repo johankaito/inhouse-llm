@@ -90,14 +90,11 @@ class ToolParsingTests(unittest.TestCase):
                 self.success = success
                 self.metadata = metadata
 
-        results = [
-            _Result(True, {"file_path": "/tmp/test.txt"}),
-            _Result(True, {}),
-        ]
-        self.assertTrue(orchestrator._should_run_post_checks(results))
+        changed_paths = ["/tmp/test.txt"]
+        self.assertTrue(orchestrator._should_run_post_checks(changed_paths))
 
-        results = [_Result(True, {}), _Result(False, {"file_path": "/tmp/test.txt"})]
-        self.assertFalse(orchestrator._should_run_post_checks(results))
+        changed_paths = []
+        self.assertFalse(orchestrator._should_run_post_checks(changed_paths))
 
 
 if __name__ == "__main__":

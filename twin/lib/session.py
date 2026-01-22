@@ -695,39 +695,49 @@ Then continue your response based on the tool result.
                     error=str(e)
                 ))
 
+        changed_paths: List[str] = []
+        for r in results:
+            if r.success and isinstance(r.metadata, dict) and r.metadata.get('file_path'):
+                changed_paths.append(str(r.metadata.get('file_path')))
+
         # Run post-edit checks if we modified files
-        if self._should_run_post_checks(results):
-            self._run_post_edit_checks()
+        if self._should_run_post_checks(changed_paths):
+            self._run_post_edit_checks(changed_paths)
 
         return results
 
     def _format_tool_results(self, results: List[ToolResult]) -> str:
         """Format tool results to send back to model"""
         formatted = []
+        MAX_OUTPUT_CHARS = 8000
 
         for i, result in enumerate(results):
             status = "success" if result.success else "error"
+            output = result.output if result.output else result.error
+            if isinstance(output, str) and len(output) > MAX_OUTPUT_CHARS:
+                output = output[:MAX_OUTPUT_CHARS] + "\n[truncated]"
 
             formatted.append(f"""
 TOOL_RESULT: {status}
-OUTPUT: {result.output if result.output else result.error}
+OUTPUT: {output}
 """)
 
         return "\n".join(formatted)
 
-    def _should_run_post_checks(self, results: List[ToolResult]) -> bool:
+    def _should_run_post_checks(self, changed_paths: List[str]) -> bool:
         """Detect whether any tool changed files and should trigger post-edit checks"""
-        for r in results:
-            if not r.success:
-                continue
-            if isinstance(r.metadata, dict) and r.metadata.get('file_path'):
-                return True
-        return False
+        return bool(changed_paths)
 
-    def _run_post_edit_checks(self) -> None:
+    def _run_post_edit_checks(self, changed_paths: List[str]) -> None:
         """Run lightweight post-edit validation (lint/tests) when safe to do so"""
         cwd = os.getcwd()
         commands: List[List[str]] = []
+
+        # Skip tests for doc-only edits
+        doc_exts = {".md", ".rst", ".txt", ".adoc", ".csv", ".json", ".yaml", ".yml", ".toml"}
+        if changed_paths and all(Path(p).suffix.lower() in doc_exts for p in changed_paths):
+            console.print("[dim]Detected doc-only changes; skipping post-edit checks.[/dim]")
+            return
 
         package_json = Path(cwd) / "package.json"
         node_modules = Path(cwd) / "node_modules"

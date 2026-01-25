@@ -135,6 +135,7 @@ class SessionOrchestrator:
             'next_steps': [],
             'files_discussed': []
         }
+        self.keyboard_enabled = bool(os.getenv("TWIN_ENABLE_KEYBOARD", "").strip().lower() in {"1", "true", "yes"})
 
         # Initialize tool registry
         self.tool_registry = ToolRegistry(config)
@@ -774,7 +775,7 @@ OUTPUT: {output}
         """Call Ollama with live timer, ESC interrupt, optional image support, and full history"""
         try:
             # Start keyboard listener and reset ESC flag
-            if KEYBOARD_AVAILABLE:
+            if KEYBOARD_AVAILABLE and self.keyboard_enabled:
                 _start_keyboard_listener()
                 _reset_esc_flag()
 
@@ -802,7 +803,8 @@ OUTPUT: {output}
             import ollama as ollama_lib
             import threading  # ensure available for timer
 
-            # Show live elapsed timer while thinking
+            stream_enabled = bool(self.config.get("twin_config", {}).get("generation_params", {}).get("stream", False))
+
             stop_timer = False
 
             def _timer():
@@ -816,11 +818,14 @@ OUTPUT: {output}
                         live.update(display)
                         time.sleep(1)
 
-            timer_thread = threading.Thread(target=_timer, daemon=True)
-            timer_thread.start()
+            timer_thread = None
+            if not stream_enabled:
+                timer_thread = threading.Thread(target=_timer, daemon=True)
+                timer_thread.start()
+            else:
+                console.print("[cyan]🤔 Thinking... (streaming)[/cyan]")
 
             try:
-                stream_enabled = bool(self.config.get("twin_config", {}).get("generation_params", {}).get("stream", False))
                 if stream_enabled:
                     response_chunks: List[str] = []
                     for chunk in ollama_lib.chat(
@@ -843,7 +848,8 @@ OUTPUT: {output}
                     )
             finally:
                 stop_timer = True
-                timer_thread.join(timeout=2)
+                if timer_thread:
+                    timer_thread.join(timeout=2)
                 console.print()
 
             elapsed = time.time() - start_time

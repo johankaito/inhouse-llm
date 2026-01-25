@@ -78,7 +78,7 @@ class AgentLoader:
         if mode == 'work':
             priority = ['technical-lead', 'task-manager', 'decision-framework']
         else:
-            priority = ['decision-framework', 'task-manager', 'technical-lead']
+            priority = ['health-coach', 'decision-framework', 'task-manager', 'technical-lead']
 
         for agent_name in priority:
             if agent_name in self.agents:

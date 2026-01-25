@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "default_model": "ultrafast",
+  "default_model": "balanced",
   "model_aliases": {
     "ultrafast": {
       "model": "qwen2.5-coder:1.5b-ultrafast",
@@ -47,7 +47,7 @@
     "task-manager": "fast",
     "communication-handler": "fast",
     "learning-manager": "fast",
-    "health-coach": "fast",
+    "health-coach": "balanced",
     "travel-agent": "fast",
     "budget-tracker": "fast",
     "disaster-recovery-architect": "balanced",
@@ -55,7 +55,7 @@
   },
   "mode_defaults": {
     "work": "balanced",
-    "personal": "fast"
+    "personal": "balanced"
   },
   "ollama": {
     "base_url": "http://localhost:11434",

@@ -840,7 +840,7 @@ OUTPUT: {output}
 
             stop_timer = False
 
-            def _timer():
+            def _timer_live():
                 with Live(console=console, refresh_per_second=4) as live:
                     while not stop_timer:
                         elapsed_sec = int(time.time() - start_time)
@@ -851,11 +851,23 @@ OUTPUT: {output}
                         live.update(display)
                         time.sleep(1)
 
+            def _timer_stream():
+                # Lightweight stderr timer to avoid interfering with streamed tokens
+                while not stop_timer:
+                    elapsed_sec = int(time.time() - start_time)
+                    sys.stderr.write(f"\r⏱️ {elapsed_sec}s")
+                    sys.stderr.flush()
+                    time.sleep(1)
+                sys.stderr.write("\r")
+                sys.stderr.flush()
+
             timer_thread = None
             if not stream_enabled:
-                timer_thread = threading.Thread(target=_timer, daemon=True)
+                timer_thread = threading.Thread(target=_timer_live, daemon=True)
                 timer_thread.start()
             else:
+                timer_thread = threading.Thread(target=_timer_stream, daemon=True)
+                timer_thread.start()
                 console.print("[cyan]🤔 Thinking... (streaming)[/cyan]")
 
             try:

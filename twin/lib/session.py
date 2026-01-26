@@ -862,6 +862,7 @@ OUTPUT: {output}
                 sys.stderr.flush()
 
             timer_thread = None
+            first_token_seen = False
             if not stream_enabled:
                 timer_thread = threading.Thread(target=_timer_live, daemon=True)
                 timer_thread.start()
@@ -882,9 +883,18 @@ OUTPUT: {output}
                         token = chunk.get("message", {}).get("content", "")
                         if token:
                             response_chunks.append(token)
+                            # stop timer once output begins
+                            if not first_token_seen:
+                                first_token_seen = True
+                                stop_timer = True
+                                if timer_thread:
+                                    timer_thread.join(timeout=1)
                             console.print(token, end="", highlight=False, overflow="ignore")
                     console.print()
                     response_text = {"message": {"content": "".join(response_chunks)}}
+                    stop_timer = True
+                    if timer_thread:
+                        timer_thread.join(timeout=1)
                 else:
                     response_text = ollama_lib.chat(
                         model=model_name,

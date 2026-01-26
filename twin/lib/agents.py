@@ -115,6 +115,40 @@ class AgentLoader:
         matches.sort(key=lambda x: x[1], reverse=True)
         return matches[0][0]
 
+    def select_agent_with_reason(self, user_input: str, mode: str, current_agent: Dict[str, Any]) -> Dict[str, Any]:
+        """Heuristic agent selection with reasons"""
+        text = user_input.lower()
+
+        domain_keywords = {
+            'health-coach': {'health', 'meal', 'nutrition', 'diet', 'calorie', 'macro', 'workout', 'exercise', 'recipe'},
+            'travel-agent': {'travel', 'trip', 'flight', 'hotel', 'itinerary', 'visa'},
+            'technical-lead': {'code', 'bug', 'deploy', 'pr', 'refactor', 'build', 'tests', 'api', 'repo'},
+            'communication-handler': {'email', 'respond', 'reply', 'draft', 'message'},
+        }
+
+        best_agent = current_agent
+        best_reason = f"default for mode {mode}"
+        best_score = 0
+
+        for agent_name, keywords in domain_keywords.items():
+            score = sum(1 for kw in keywords if kw in text)
+            if score > best_score and agent_name in self.agents:
+                best_score = score
+                best_agent = self.agents[agent_name]
+                matched = sorted({kw for kw in keywords if kw in text})
+                best_reason = f"matched keywords: {', '.join(matched)}" if matched else f"domain: {agent_name}"
+
+        if best_score == 0:
+            keyword_match = self.match_agent_by_keywords(user_input, mode)
+            if keyword_match:
+                best_agent = keyword_match
+                best_reason = "matched agent keywords"
+
+        return {
+            "agent": best_agent,
+            "reason": best_reason
+        }
+
     def _extract_keywords(self, content: str) -> List[str]:
         """Extract activation keywords from CLAUDE.md"""
         keywords = []

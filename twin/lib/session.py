@@ -136,6 +136,8 @@ class SessionOrchestrator:
             'files_discussed': []
         }
         self.keyboard_enabled = bool(os.getenv("TWIN_ENABLE_KEYBOARD", "").strip().lower() in {"1", "true", "yes"})
+        self.agent_reason = f"default for mode {mode}"
+        self.last_model_used = model
 
         # Initialize tool registry
         self.tool_registry = ToolRegistry(config)
@@ -319,6 +321,9 @@ class SessionOrchestrator:
                 # Track conversation textually for saved context
                 current.session_data['planning_discussion'] += f"\n{user_input}\n"
 
+                # Auto-switch agent based on input intent
+                current._maybe_switch_agent(user_input)
+
                 # Check for images (from pasted placeholders or file paths in text)
                 image_paths = []
 
@@ -387,6 +392,7 @@ Based on the above tool results, provide your complete response to the user's or
                         clean_response = current._append_sources(clean_response)
                         console.print()
                         console.print(Markdown(clean_response))
+                        console.print(f"[dim]Agent: {self.agent.get('name')} ({self.agent_reason}); Model: {self.last_model_used}[/dim]")
 
                         # Display timing
                         if hasattr(self, 'last_query_time') and self.last_query_time > 0:
@@ -414,6 +420,11 @@ Based on the above tool results, provide your complete response to the user's or
 
         if self.agent.get('master_prompt'):
             prompt_parts.append(self.agent['master_prompt'])
+
+        # Domain-specific prompt additions
+        domain_prompt = self._get_domain_prompt(self.agent.get('name'))
+        if domain_prompt:
+            prompt_parts.append(domain_prompt)
 
         # Add mode-specific behavior
         if self.mode == 'work':
@@ -511,6 +522,28 @@ The improvement will be:
             prompt_parts.append(f"\n\nEnvironment Context:\n{self.env_context}")
 
         return "\n\n".join(prompt_parts)
+
+    def _get_domain_prompt(self, agent_name: str) -> str:
+        """Domain-specific guidance to avoid generic answers"""
+        prompts = {
+            'health-coach': """
+You are the health-coach. Be concrete and specific:
+- Ask for missing constraints (calories/macros, allergies, dislikes, cooking time, budget) before prescribing.
+- Provide meal plans with portions in grams/cups, calories and macro estimates per meal.
+- Include shopping list with quantities per ingredient.
+- Avoid generic motivational tips; prioritize actionable, specific plans.
+""",
+            'technical-lead': """
+You are the technical-lead. Be concrete:
+- Use file:line cites when referring to code; if missing, say so and request context.
+- Prefer diffs/patches; specify commands to run (tests/lint).
+- Avoid vague advice; give crisp steps and trade-offs.
+""",
+            'travel-agent': """
+You are the travel-agent. Provide specific itineraries, times, and costs when possible.
+""",
+        }
+        return prompts.get(agent_name, "")
 
     def _get_tool_instructions(self) -> str:
         """Generate tool calling instructions for prompt"""
@@ -865,6 +898,7 @@ OUTPUT: {output}
                 'timestamp': time.time()
             })
             self.last_query_time = elapsed
+            self.last_model_used = model_name
 
             # Clear pasted images after sending
             if self.pasted_images:
@@ -1925,6 +1959,25 @@ Next Steps:
         if requested in aliases:
             return aliases[requested].get('model', requested)
         return requested or "qwen2.5-coder:7b"
+
+    def _maybe_switch_agent(self, user_input: str) -> None:
+        """Auto-select agent based on input intent and annotate reason"""
+        try:
+            selection = self.agent_loader.select_agent_with_reason(
+                user_input=user_input,
+                mode=self.mode,
+                current_agent=self.agent
+            )
+            new_agent = selection.get("agent", self.agent)
+            reason = selection.get("reason", "default")
+            if new_agent and new_agent.get('name') != self.agent.get('name'):
+                self.agent = new_agent
+                self.agent_reason = reason
+                self.session_data['agent'] = new_agent['name']
+                console.print(f"[cyan]↔ Auto-switched agent to {new_agent['name']} ({reason})[/cyan]")
+        except Exception:
+            # fail-safe: keep current agent
+            pass
 
     def _estimate_char_count(self, messages: List[Dict[str, Any]]) -> int:
         """Approximate size of the conversation in characters"""

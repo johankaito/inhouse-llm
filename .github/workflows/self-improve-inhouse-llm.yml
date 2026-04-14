@@ -1,0 +1,217 @@
+name: Self-Improve inhouse-llm
+
+on:
+  schedule:
+    # 9:30am Sydney time (UTC+10 AEST / UTC+11 AEDT)
+    # April = AEST (UTC+10): 9:30am = 23:30 UTC previous night
+    - cron: "30 23 * * *"
+  workflow_dispatch:  # allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  self-improve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout inhouse-llm
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Install the Anthropic SDK (used by agent.py) plus lightweight test deps.
+      # We deliberately skip ollama and pynput — no GPU/display in CI.
+      # Tests that require Ollama are expected to skip gracefully.
+      - name: Install dependencies
+        run: |
+          pip install anthropic
+          pip install \
+            click rich prompt_toolkit pyyaml \
+            requests beautifulsoup4 html2text PyGithub \
+            pyperclip pillow \
+            pytest pytest-mock
+
+      - name: Run self-improve agent
+        id: agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_MODEL: claude-opus-4-6
+        run: |
+          python scripts/self-improve/agent.py
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        # exit 0 = changes found, exit 2 = nothing to improve
+        continue-on-error: true
+
+      - name: Check if changes were made
+        id: check
+        run: |
+          if git diff --quiet && git ls-files --others --exclude-standard | grep -q .; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          elif ! git diff --quiet; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Validate syntax of any modified Python files
+      - name: Syntax-check changed Python files
+        if: steps.check.outputs.has_changes == 'true'
+        id: syntax
+        run: |
+          CHANGED_PY=$(git diff --name-only | grep '\.py$' || true)
+          NEW_PY=$(git ls-files --others --exclude-standard | grep '\.py$' || true)
+          ALL_PY="$CHANGED_PY $NEW_PY"
+          SYNTAX_OK=true
+          for f in $ALL_PY; do
+            if [ -f "$f" ]; then
+              if ! python -m py_compile "$f" 2>/tmp/syntax_err; then
+                echo "SYNTAX ERROR in $f:"
+                cat /tmp/syntax_err
+                SYNTAX_OK=false
+              fi
+            fi
+          done
+          echo "syntax_ok=$SYNTAX_OK" >> "$GITHUB_OUTPUT"
+
+      # Run test suite. Tests needing Ollama will skip; we still want to know
+      # if any non-Ollama tests break.
+      - name: Run tests
+        if: steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
+        id: tests
+        working-directory: twin
+        run: |
+          # Add lib to PYTHONPATH so imports work without installing the package
+          export PYTHONPATH="$PWD/lib:$PYTHONPATH"
+          python -m pytest \
+            test_self_improvement.py \
+            test_session_tools_parsing.py \
+            test_tools.py \
+            --tb=short -q \
+            --ignore=test_hot_reload.py \
+            --ignore=test_esc_and_images.py \
+            --ignore=test_online_tools.py \
+            2>&1 | tee /tmp/pytest_output.txt || true
+          # Capture exit code separately
+          python -m pytest \
+            test_self_improvement.py \
+            test_session_tools_parsing.py \
+            test_tools.py \
+            --tb=no -q \
+            --ignore=test_hot_reload.py \
+            --ignore=test_esc_and_images.py \
+            --ignore=test_online_tools.py \
+            > /dev/null 2>&1
+          echo "test_exit=$?" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      # Append test results to pr_body.md
+      - name: Append test results to PR body
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          if [ -f /tmp/pytest_output.txt ]; then
+            echo "" >> pr_body.md
+            echo "## Test Results" >> pr_body.md
+            echo '```' >> pr_body.md
+            cat /tmp/pytest_output.txt >> pr_body.md
+            echo '```' >> pr_body.md
+          fi
+          if [ "${{ steps.syntax.outputs.syntax_ok }}" = "false" ]; then
+            echo "" >> pr_body.md
+            echo "## ⚠️ Syntax Errors Detected" >> pr_body.md
+            echo "Some auto-applied changes contained Python syntax errors and were skipped by the agent." >> pr_body.md
+            echo "Review the workflow logs for details." >> pr_body.md
+          fi
+
+      - name: Create branch and commit changes
+        if: steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
+        id: branch
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          BRANCH="self-improve/daily-${DATE}"
+          git config user.name "johankaito"
+          git config user.email "${{ secrets.GIT_EMAIL }}"
+          git checkout -b "$BRANCH"
+          git add scripts/ .github/ twin/ pr_body.md
+          # Stage any new files written by the agent
+          git add -A
+          git commit -m "twin: daily self-improvement pass ${DATE}
+
+          Automated audit across code quality, prompt quality, test coverage,
+          documentation drift, backlog, and safety dimensions.
+          See PR description for full change rationale and test results."
+          git push origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        if: steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_URL=$(gh pr create \
+            --title "twin: self-improve pass ${{ steps.branch.outputs.date }}" \
+            --body-file pr_body.md \
+            --base main \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --label "self-improve" \
+            --assignee johankaito)
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "PR created: $PR_URL"
+
+      - name: Notify via Telegram — PR ready
+        if: steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          PR_URL="${{ steps.pr.outputs.pr_url }}"
+          DATE="${{ steps.branch.outputs.date }}"
+          TEST_STATUS="${{ steps.tests.outputs.test_exit }}"
+          TEST_LABEL="✅ tests passed"
+          if [ "$TEST_STATUS" != "0" ]; then
+            TEST_LABEL="⚠️ some tests failed — review carefully"
+          fi
+          MESSAGE="🧠 inhouse-llm self-improve PR ready%0A%0ADate: ${DATE}%0A${TEST_LABEL}%0APR: ${PR_URL}%0A%0AReview and merge when ready."
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=${MESSAGE}" \
+            -d "parse_mode=HTML" \
+            > /dev/null
+
+      - name: Notify via Telegram — no changes
+        if: steps.check.outputs.has_changes == 'false'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          MESSAGE="✅ inhouse-llm self-improve: no changes needed (${DATE})"
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=${MESSAGE}" \
+            > /dev/null
+
+      - name: Notify via Telegram — syntax errors blocked commit
+        if: steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'false'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          MESSAGE="⚠️ inhouse-llm self-improve: syntax errors in proposed changes — commit blocked (${DATE})%0ACheck workflow logs for details."
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=${MESSAGE}" \
+            > /dev/null

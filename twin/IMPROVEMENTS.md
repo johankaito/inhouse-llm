@@ -51,6 +51,13 @@ Each improvement includes:
 - Files: lib/tools.py, lib/self_improver.py, lib/session.py, tests/test_path_safety.py
 - Commit: (pending)
 
+## 2025-07-15 - Tests for reload hot-swap, env snapshot, tool intent mapping
+- Added twin/tests/test_hot_reload_and_augment.py with 15 tests covering: reload state dict completeness (AST-parsed), _build_env_context structure, _augment_with_env/tools/repo trigger keywords, structured and legacy tool-call parsing, _summarize_text bounds
+- Fixed indentation inconsistency in _reload_modules state dict (session.py)
+- Identified (propose_only): self_improver.py lacks path traversal guard on propose_improvement file writes
+- Files: twin/tests/test_hot_reload_and_augment.py (new), twin/lib/session.py (auto_apply)
+- Commit: (pending)
+
 ## Pending / Proposed Improvements (tracked for parity)
 
 | Status   | Item                                                              | Impact (relative) |

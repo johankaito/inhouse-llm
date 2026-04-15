@@ -53,9 +53,11 @@ twin --mode work --agent technical-lead --model balanced
 
 | Alias | Model | Speed | RAM | Use For |
 |-------|-------|-------|-----|---------|
-| `fast` | qwen2.5-coder:7b | 15-20 tok/s | 8-10GB | Daily coding, quick tasks (DEFAULT) |
-| `balanced` | qwen2.5-coder:14b | 8-12 tok/s | 15-18GB | Complex code, better quality |
-| `quality` | qwen2.5-coder:32b | 4-6 tok/s | 25-28GB | Critical architecture decisions |
+| `ultrafast` | qwen2.5-coder:1.5b-ultrafast | 40-60 tok/s | 3-4GB | Trivial tasks, ultra-low latency |
+| `fast` | qwen2.5-coder:3b-fast | 30-40 tok/s | 4-6GB | Quick tasks, light coding |
+| `balanced` | qwen2.5-coder:7b | 15-20 tok/s | 8-10GB | Daily coding (DEFAULT) |
+| `quality` | qwen2.5-coder:14b | 8-12 tok/s | 15-18GB | Complex code, better quality |
+| `max` | qwen2.5-coder:32b | 4-6 tok/s | 25-28GB | Critical architecture decisions |
 | `reasoning` | deepseek-r1:8b | 10-15 tok/s | 10-12GB | Finance, planning, 5 Whys depth |
 
 ## In-Session Commands

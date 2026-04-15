@@ -24,6 +24,14 @@ Each improvement includes:
 
 ---
 
+## 2026-01-03 - Safety audit: bare except fix, output truncation proposal, doc drift fix, test coverage for config/modes
+- Fixed bare `except` in modes.py → specific exception types
+- Fixed stale model alias table in QUICKREF.md (fast/balanced/quality mismatch with twin.config.json)
+- Proposed output truncation for bash/glob/grep tools (sandboxed tool safety backlog item)
+- Added unit tests for config.py and modes.py (zero prior coverage)
+- Files changed: twin/lib/modes.py, twin/QUICKREF.md, twin/tests/test_config.py (new), twin/tests/test_modes.py (new)
+- Commit: (pending)
+
 ## Pending / Proposed Improvements (tracked for parity)
 
 | Status   | Item                                                              | Impact (relative) |

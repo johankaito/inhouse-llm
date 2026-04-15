@@ -1,0 +1,60 @@
+name: Record Self-Improve PR Outcome (inhouse-llm)
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  record-outcome:
+    if: contains(github.event.pull_request.labels.*.name, 'self-improve')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout inhouse-llm
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Record PR outcome
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+          CLOSED_AT=$(date +%Y-%m-%d)
+          OUTCOMES_FILE="twin/self-improve-outcomes.md"
+
+          if [ "$MERGED" = "true" ]; then
+            STATUS="ACCEPTED"
+            EMOJI="✅"
+          else
+            STATUS="REJECTED"
+            EMOJI="❌"
+          fi
+
+          mkdir -p twin
+          if [ ! -f "$OUTCOMES_FILE" ]; then
+            cat > "$OUTCOMES_FILE" << 'EOF'
+# Self-Improve PR Outcomes
+
+This file tracks which self-improve PRs were accepted (merged) or rejected (closed without merge).
+The self-improve agent reads this file to learn from past decisions.
+
+## Outcomes
+
+EOF
+          fi
+
+          echo "- ${EMOJI} **${STATUS}** — PR #${PR_NUMBER}: ${PR_TITLE} (${CLOSED_AT})" >> "$OUTCOMES_FILE"
+
+          git config user.name "johankaito"
+          git config user.email "${{ secrets.GIT_EMAIL }}"
+          git add "$OUTCOMES_FILE"
+          git diff --staged --quiet || git commit -m "twin: record self-improve PR #${PR_NUMBER} outcome (${STATUS})"
+          git push origin main

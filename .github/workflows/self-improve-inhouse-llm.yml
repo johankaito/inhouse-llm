@@ -2,8 +2,8 @@ name: Self-Improve inhouse-llm
 
 on:
   schedule:
-    # 9:30am Sydney time (UTC+10 AEST)
-    - cron: "30 23 * * *"
+    # 8am Sydney time (UTC+10 AEST = 22:00 UTC)
+    - cron: "0 22 * * *"
   workflow_dispatch:
 
 permissions:

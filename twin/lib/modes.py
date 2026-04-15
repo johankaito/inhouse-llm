@@ -83,7 +83,7 @@ class ModeDetector:
                     if work_email_pattern in email:
                         return 'work'
                 return 'personal'
-        except:
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
         return None
 

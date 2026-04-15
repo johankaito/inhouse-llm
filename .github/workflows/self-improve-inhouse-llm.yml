@@ -139,7 +139,7 @@ jobs:
           git config user.name "johankaito"
           git config user.email "${{ secrets.GIT_EMAIL }}"
           git checkout -b "$BRANCH"
-          git add -A
+          git add twin/
           git commit -m "twin: daily self-improvement pass ${DATE}
 
           Two-pass audit (AST signatures → targeted deep review) across:

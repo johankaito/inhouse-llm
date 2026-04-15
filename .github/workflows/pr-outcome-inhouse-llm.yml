@@ -40,15 +40,7 @@ jobs:
 
           mkdir -p twin
           if [ ! -f "$OUTCOMES_FILE" ]; then
-            cat > "$OUTCOMES_FILE" << 'EOF'
-# Self-Improve PR Outcomes
-
-This file tracks which self-improve PRs were accepted (merged) or rejected (closed without merge).
-The self-improve agent reads this file to learn from past decisions.
-
-## Outcomes
-
-EOF
+            printf '# Self-Improve PR Outcomes\n\nThis file tracks which self-improve PRs were accepted (merged) or rejected (closed without merge).\nThe self-improve agent reads this file to learn from past decisions.\n\n## Outcomes\n\n' > "$OUTCOMES_FILE"
           fi
 
           echo "- ${EMOJI} **${STATUS}** — PR #${PR_NUMBER}: ${PR_TITLE} (${CLOSED_AT})" >> "$OUTCOMES_FILE"

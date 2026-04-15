@@ -342,7 +342,7 @@ class SessionOrchestrator:
                 # If images detected, check for vision model and prepare to use it
                 vision_model = None
                 if image_paths:
-                    vision_model = self._get_vision_model()
+                    vision_model = current._get_vision_model()
                     if vision_model:
                         console.print(f"[cyan]🔄 Using {vision_model} for vision support[/cyan]\n")
                     else:
@@ -359,11 +359,11 @@ class SessionOrchestrator:
 
                 if response:
                     # Check for tool calls in response
-                    tool_calls = self._parse_tool_calls(response)
+                    tool_calls = current._parse_tool_calls(response)
 
                     if tool_calls:
                         # Execute tools
-                        tool_results = self._execute_tools(tool_calls)
+                        tool_results = current._execute_tools(tool_calls)
 
                         # Check if restart is required (self-improvement)
                         requires_restart = any(
@@ -371,7 +371,7 @@ class SessionOrchestrator:
                         )
 
                         # Format results and send back to model
-                        tool_results_text = self._format_tool_results(tool_results)
+                        tool_results_text = current._format_tool_results(tool_results)
 
                         # Continue conversation with tool results
                         # Use minimal prompt to focus on results, not old context
@@ -380,11 +380,11 @@ class SessionOrchestrator:
 {tool_results_text}
 
 Based on the above tool results, provide your complete response to the user's original question."""
-                        response = self._call_ollama(followup_prompt)
+                        response = current._call_ollama(followup_prompt)
 
                         # Handle restart if needed
                         if requires_restart:
-                            self._handle_restart()
+                            current._handle_restart()
 
                     if response:
                         # Display final response (strip out any remaining tool call markers)
@@ -392,16 +392,16 @@ Based on the above tool results, provide your complete response to the user's or
                         clean_response = current._append_sources(clean_response)
                         console.print()
                         console.print(Markdown(clean_response))
-                        console.print(f"[dim]Agent: {self.agent.get('name')} ({self.agent_reason}); Model: {self.last_model_used}[/dim]")
+                        console.print(f"[dim]Agent: {current.agent.get('name')} ({current.agent_reason}); Model: {current.last_model_used}[/dim]")
 
                         # Display timing
-                        if hasattr(self, 'last_query_time') and self.last_query_time > 0:
-                            console.print(f"\n[dim]⏱️  {self.last_query_time:.1f}s | {self.model}[/dim]")
+                        if hasattr(current, 'last_query_time') and current.last_query_time > 0:
+                            console.print(f"\n[dim]⏱️  {current.last_query_time:.1f}s | {current.model}[/dim]")
 
                         console.print()
 
                         # Track conversation
-                        self.session_data['planning_discussion'] += f"\n{response}\n"
+                        current.session_data['planning_discussion'] += f"\n{response}\n"
 
             except KeyboardInterrupt:
                 console.print("\n\n[yellow]Interrupted[/yellow]")

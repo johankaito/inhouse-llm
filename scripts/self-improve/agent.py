@@ -457,9 +457,11 @@ def main():
         raw = "\n".join(raw.split("\n")[1:])
         if "```" in raw:
             raw = raw[: raw.rfind("```")]
+    raw = raw.strip()
 
     try:
-        result = json.loads(raw)
+        # Use raw_decode so extra text after the JSON object doesn't cause failure
+        result, _ = json.JSONDecoder().raw_decode(raw)
     except json.JSONDecodeError as e:
         print(f"ERROR: Could not parse API response as JSON: {e}", file=sys.stderr)
         print(f"Raw (first 1000 chars):\n{raw[:1000]}", file=sys.stderr)

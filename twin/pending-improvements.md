@@ -67,3 +67,39 @@ Why 4: Users relying on QUICKREF
 The QUICKREF.md model alias table, the agent model descriptions section, and the mid-session switching example all need to be regenerated from the actual twin.config.json values. Without access to twin.config.json in this audit, the exact replacement text cannot be produced, but every instance of 'balanced → qwen2.5-coder:14b' should likely be 'balanced → qwen2.5-coder:7b', 'quality → qwen2.5-coder:32b' should be 'quality → qwen2.5-coder:14b', and 'max → qwen2.5-coder:32b' is the 32b tier. The 'Balanced Agents (use qwen2.5-coder:14b)' section should reference the correct model.
 ```
 
+## 2026-04-15 | tests-for-reload-hot-swap-state-migratio | pending
+**File**: `twin/tests/test_hot_reload_and_augment.py`
+**Description**: Tests for reload hot-swap state migration, env snapshot building, and tool intent mapping — the backlog pick for this run
+**5 Whys**: Why 1: _reload_modules performs state migration between old and new SessionOrchestrator instances with no test coverage.
+Why 2: If state migration silently drops fields (e.g. repo_index, running_summary), the session degrades without visible error.
+Why 3: _augment_with_env/_augment_with_tools/_augme
+**Proposed diff**:
+```diff
+See new_files entry for twin/tests/test_hot_reload_and_augment.py
+```
+
+
+## 2026-04-15 | add-path-traversal-guard-to-propose_impr | pending
+**File**: `twin/lib/self_improver.py`
+**Description**: Add path traversal guard to propose_improvement to prevent writes outside twin_dir
+**5 Whys**: Why 1: propose_improvement joins twin_dir with arbitrary file_path keys from the LLM without resolving or checking.
+Why 2: A malicious or hallucinated path like '../../.bashrc' would write outside the twin directory.
+Why 3: Self-improvement is an autonomous capability — the LLM chooses the file path
+**Proposed diff**:
+```diff
+--- a/twin/lib/self_improver.py
++++ b/twin/lib/self_improver.py
+@@ -68,6 +68,14 @@
+ 
+         timestamp = datetime.now().isoformat()
+         improvement_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+ 
++        # Path traversal guard: all files must resolve within twin_dir
++        for file_path in files.keys():
++            full_path = (self.twin_dir / file_path).resolve()
++            twin_resolved = self.twin_dir.resolve()
++            if not str(full_path).startswith(str(twin_resolved) + os.sep) and full_path != twin_resolved:
++                raise ValueError(
++                    f"Path 
+```
+

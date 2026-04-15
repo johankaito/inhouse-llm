@@ -32,6 +32,25 @@ Each improvement includes:
 - Files changed: twin/lib/modes.py, twin/QUICKREF.md, twin/tests/test_config.py (new), twin/tests/test_modes.py (new)
 - Commit: (pending)
 
+## 2025-01-28 - Safety: Sensitive-path guardrails for file-writing tools
+
+**What:** Added path confinement and sensitive-path blocklists to _write_file, _edit_file, _apply_patch, and self_improver.propose_improvement. Blocks writes outside cwd, to ~/.ssh, /etc, and known credential files.
+
+**Why (5 Whys):**
+1. File-writing tools accept arbitrary paths with no validation
+2. A single hallucinated or injected tool call can overwrite system/credential files
+3. Self-improvement writes files autonomously without human confirmation
+4. Path allowlists are the right granularity for a CLI tool (vs full sandboxing)
+5. Safety rails reduce blast radius of all other bugs — defense-in-depth
+
+**Also fixed:**
+- Dict indentation in _reload_modules state snapshot
+- Stale `self` references in main loop (should be `current` after hot-swap)
+- Added test_path_safety.py for guardrail verification
+
+- Files: lib/tools.py, lib/self_improver.py, lib/session.py, tests/test_path_safety.py
+- Commit: (pending)
+
 ## Pending / Proposed Improvements (tracked for parity)
 
 | Status   | Item                                                              | Impact (relative) |

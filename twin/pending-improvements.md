@@ -103,3 +103,31 @@ Why 3: Self-improvement is an autonomous capability — the LLM chooses the file
 +                    f"Path 
 ```
 
+## 2026-04-15 | enrich-citation-style-answers:-add-line- | pending
+**File**: `twin/lib/session.py`
+**Description**: Enrich citation-style answers: add line-range anchors to _retrieve_repo_context hits and format _append_sources as clickable file:line references
+**5 Whys**: Why 1: Users need to verify LLM claims by checking the actual source lines.
+Why 2: Current _append_sources outputs raw snippet text without actionable line references.
+Why 3: The repo index already stores start_line per chunk but it's not surfaced in citations.
+Why 4: Without verifiable citations, l
+**Proposed diff**:
+```diff
+--- a/twin/lib/session.py
++++ b/twin/lib/session.py
+@@ _retrieve_repo_context method
+     def _retrieve_repo_context(self, query: str, max_chunks: int = 3) -> List[Dict[str, Any]]:
+         """Retrieve top repo chunks based on simple token overlap"""
+         if not self.repo_index:
+             return []
+ 
+         tokens = re.findall(r'\w+', query.lower())
+         token_set = set(tokens)
+         if not token_set:
+             return []
+ 
+         scored = []
+         for chunk in self.repo_index:
+             chunk_tokens = set(re.findall(r'\w+', chunk['text'].lower()))
+             score 
+```
+

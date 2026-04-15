@@ -853,11 +853,15 @@ class ToolRegistry:
                     if f.is_file() and not self._should_ignore(f)
                 ]
 
+            MAX_MATCHES = 500
+
             for file_path in files_to_search:
                 try:
                     lines = file_path.read_text().splitlines()
 
                     for i, line in enumerate(lines):
+                        if len(matches) >= MAX_MATCHES:
+                            break
                         if regex.search(line):
                             # Add context lines
                             start = max(0, i - context)
@@ -874,6 +878,9 @@ class ToolRegistry:
                 except (UnicodeDecodeError, PermissionError):
                     # Skip binary files and files we can't read
                     continue
+
+                if len(matches) >= MAX_MATCHES:
+                    break
 
             # Format output
             if not matches:

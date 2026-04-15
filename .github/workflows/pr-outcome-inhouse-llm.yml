@@ -50,3 +50,9 @@ jobs:
           git add "$OUTCOMES_FILE"
           git diff --staged --quiet || git commit -m "twin: record self-improve PR #${PR_NUMBER} outcome (${STATUS})"
           git push origin main
+
+      - name: Re-trigger self-improve on merge
+        if: github.event.pull_request.merged == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run self-improve-inhouse-llm.yml --repo ${{ github.repository }}

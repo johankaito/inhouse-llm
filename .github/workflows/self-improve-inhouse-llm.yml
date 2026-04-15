@@ -135,7 +135,7 @@ jobs:
         id: branch
         run: |
           DATE=$(date +%Y-%m-%d)
-          BRANCH="self-improve/daily-${DATE}"
+          BRANCH="self-improve/${DATE}-$(date +%H%M)"
           git config user.name "johankaito"
           git config user.email "${{ secrets.GIT_EMAIL }}"
           git checkout -b "$BRANCH"

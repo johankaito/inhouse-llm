@@ -284,7 +284,7 @@ PASS2_SCHEMA = textwrap.dedent("""
           "dimension": "code_quality | prompt_quality | test_coverage | documentation_drift | safety",
           "five_whys": "Why 1: ...\\nWhy 2: ...\\n...",
           "confidence": 0.95,
-          "old_text": "exact text to replace (must be unique in the file)",
+          "old_text": "shortest unique string (1-2 lines, no surrounding context, no trailing spaces)",
           "new_text": "replacement text"
         }
       ],
@@ -317,7 +317,9 @@ PASS2_SCHEMA = textwrap.dedent("""
     Quality bar:
     - auto_apply only if >90% confident AND safe (no logic changes)
     - propose_only for logic/feature changes — one backlog item per run
-    - old_text must be unique in the file
+    - old_text must be the SHORTEST unique string that locates the change (1-2 lines max)
+    - Never include surrounding context lines in old_text — only the lines that change
+    - old_text is matched with Python str.replace() — must be exact, no trailing spaces/tabs
     - new_text must be valid Python if file is Python
     - If nothing genuine found, set changes_found: false
 """).strip()
@@ -445,6 +447,11 @@ def validate_python(path: Path, content: str) -> tuple[bool, str]:
         return False, f"SyntaxError at line {e.lineno}: {e.msg}"
 
 
+def _rstrip_lines(s: str) -> str:
+    """Strip trailing whitespace from each line (catches editor/LLM trailing-space mismatches)."""
+    return "\n".join(line.rstrip() for line in s.split("\n"))
+
+
 def apply_auto_changes(changes: list[dict]) -> list[dict]:
     applied = []
     for change in changes:
@@ -458,13 +465,25 @@ def apply_auto_changes(changes: list[dict]) -> list[dict]:
             continue
         content = target.read_text(encoding="utf-8")
         old, new = change["old_text"], change["new_text"]
-        if old not in content:
-            print(f"  SKIP (old_text not found): {rel_path} — {old[:60]!r}", file=sys.stderr)
-            continue
-        if content.count(old) > 1:
+
+        # 1. Exact match
+        if old in content and content.count(old) == 1:
+            new_content = content.replace(old, new, 1)
+        elif old in content:
             print(f"  SKIP (not unique): {rel_path} — {old[:60]!r}", file=sys.stderr)
             continue
-        new_content = content.replace(old, new, 1)
+        else:
+            # 2. Fallback: rstrip each line (catches trailing whitespace mismatches)
+            content_norm = _rstrip_lines(content)
+            old_norm = _rstrip_lines(old)
+            new_norm = _rstrip_lines(new)
+            if old_norm in content_norm and content_norm.count(old_norm) == 1:
+                new_content = content_norm.replace(old_norm, new_norm, 1)
+                print(f"  (normalized match)", file=sys.stderr)
+            else:
+                print(f"  SKIP (old_text not found): {rel_path} — {old[:60]!r}", file=sys.stderr)
+                continue
+
         if target.suffix == ".py":
             ok, err = validate_python(target, new_content)
             if not ok:

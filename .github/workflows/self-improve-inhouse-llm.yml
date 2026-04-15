@@ -162,8 +162,9 @@ jobs:
             --body-file pr_body.md \
             --base main \
             --head "${{ steps.branch.outputs.branch }}" \
-            --label "self-improve" \
             --assignee johankaito)
+          # Add label separately so a missing label doesn't kill the run
+          gh pr edit "$PR_URL" --add-label "self-improve" 2>/dev/null || true
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
           echo "PR created: $PR_URL"
 

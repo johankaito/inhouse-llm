@@ -5,3 +5,4 @@ jina-rapid/cache/
 jina-rapid/__pycache__/
 jina-rapid/*.pyc
 jina-rapid/.venv/
+pr_body.md

@@ -168,6 +168,7 @@ jobs:
 
       - name: Notify via Telegram — PR ready
         if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -182,6 +183,7 @@ jobs:
 
       - name: Notify via Telegram — no changes
         if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'false'
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -193,6 +195,7 @@ jobs:
 
       - name: Notify via Telegram — syntax errors blocked
         if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'false'
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -204,6 +207,7 @@ jobs:
 
       - name: Notify via Telegram — skipped (no twin/ changes)
         if: steps.gate.outputs.skip == 'true'
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

@@ -73,10 +73,12 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         id: check
         run: |
-          if git diff --quiet && ! git ls-files --others --exclude-standard | grep -q .; then
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-          else
+          # Gate on agent exit code: 0 = changes applied, 2 = nothing applied or no changes.
+          # This prevents PRs that contain only dedup-log JSON updates with no real improvements.
+          if [ "${{ steps.agent.outputs.exit_code }}" = "0" ]; then
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
           fi
 
       # Syntax-check every modified Python file

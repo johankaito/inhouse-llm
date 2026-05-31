@@ -7,8 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   self-improve:
@@ -41,170 +40,6 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up Python
-        if: steps.gate.outputs.skip != 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      # Install Anthropic SDK + test deps. Skip ollama/pynput (no GPU/display in CI).
-      - name: Install dependencies
-        if: steps.gate.outputs.skip != 'true'
-        run: |
-          pip install anthropic
-          pip install \
-            click rich prompt_toolkit pyyaml \
-            requests beautifulsoup4 html2text PyGithub \
-            pyperclip pillow \
-            pytest pytest-mock
-
-      - name: Run self-improve agent (two-pass)
-        if: steps.gate.outputs.skip != 'true'
-        id: agent
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLAUDE_MODEL: claude-opus-4-6
-        run: |
-          python scripts/self-improve/agent.py
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
-
-      - name: Check if changes were made
-        if: steps.gate.outputs.skip != 'true'
-        id: check
-        run: |
-          if git diff --quiet && ! git ls-files --others --exclude-standard | grep -q .; then
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Syntax-check every modified Python file
-      - name: Syntax-check changed Python files
-        if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true'
-        id: syntax
-        run: |
-          CHANGED_PY=$(git diff --name-only | grep '\.py$' || true)
-          NEW_PY=$(git ls-files --others --exclude-standard | grep '\.py$' || true)
-          SYNTAX_OK=true
-          for f in $CHANGED_PY $NEW_PY; do
-            if [ -f "$f" ] && ! python -m py_compile "$f" 2>/tmp/syntax_err; then
-              echo "SYNTAX ERROR in $f:"; cat /tmp/syntax_err
-              SYNTAX_OK=false
-            fi
-          done
-          echo "syntax_ok=$SYNTAX_OK" >> "$GITHUB_OUTPUT"
-
-      # Run non-Ollama tests to catch regressions
-      - name: Run tests
-        if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
-        id: tests
-        working-directory: twin
-        run: |
-          export PYTHONPATH="$PWD/lib:$PYTHONPATH"
-          python -m pytest \
-            test_self_improvement.py \
-            test_session_tools_parsing.py \
-            test_tools.py \
-            --tb=short -q \
-            --ignore=test_hot_reload.py \
-            --ignore=test_esc_and_images.py \
-            --ignore=test_online_tools.py \
-            2>&1 | tee /tmp/pytest_output.txt || true
-          # Capture real exit code
-          python -m pytest \
-            test_self_improvement.py test_session_tools_parsing.py test_tools.py \
-            --tb=no -q \
-            --ignore=test_hot_reload.py --ignore=test_esc_and_images.py --ignore=test_online_tools.py \
-            > /dev/null 2>&1
-          echo "test_exit=$?" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
-
-      - name: Append test results to PR body
-        if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true'
-        run: |
-          if [ -f /tmp/pytest_output.txt ]; then
-            { echo ""; echo "## Test Results"; echo '```'; cat /tmp/pytest_output.txt; echo '```'; } >> pr_body.md
-          fi
-          if [ "${{ steps.syntax.outputs.syntax_ok }}" = "false" ]; then
-            { echo ""; echo "## ⚠️ Syntax Errors Detected"; echo "Check workflow logs."; } >> pr_body.md
-          fi
-
-      - name: Create branch and commit changes
-        if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
-        id: branch
-        run: |
-          DATE=$(date +%Y-%m-%d)
-          BRANCH="self-improve/${DATE}-$(date +%H%M)"
-          git config user.name "johankaito"
-          git config user.email "${{ secrets.GIT_EMAIL }}"
-          git checkout -b "$BRANCH"
-          git add twin/
-          git commit -m "twin: daily self-improvement pass ${DATE}
-
-          Two-pass audit (AST signatures → targeted deep review) across:
-          code quality, prompt quality, test coverage, documentation drift,
-          safety, and backlog implementation.
-          See PR description for full rationale and test results."
-          git push origin "$BRANCH"
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          echo "date=$DATE" >> "$GITHUB_OUTPUT"
-
-      - name: Create pull request
-        if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
-        id: pr
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_URL=$(gh pr create \
-            --title "twin: self-improve pass ${{ steps.branch.outputs.date }}" \
-            --body-file pr_body.md \
-            --base main \
-            --head "${{ steps.branch.outputs.branch }}" \
-            --assignee johankaito)
-          gh pr edit "$PR_URL" --add-label "self-improve" 2>/dev/null || true
-          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
-          echo "PR created: $PR_URL"
-
-      - name: Notify via Telegram — PR ready
-        if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'true'
-        continue-on-error: true
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          TEST_LABEL="✅ tests passed"
-          [ "${{ steps.tests.outputs.test_exit }}" != "0" ] && TEST_LABEL="⚠️ some tests failed"
-          MESSAGE="🧠 inhouse-llm self-improve PR ready%0A%0ADate: ${{ steps.branch.outputs.date }}%0A${TEST_LABEL}%0APR: ${{ steps.pr.outputs.pr_url }}%0A%0AReview and merge when ready."
-          curl -s -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${TELEGRAM_CHAT_ID}" \
-            -d "text=${MESSAGE}" > /dev/null
-
-      - name: Notify via Telegram — no changes
-        if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'false'
-        continue-on-error: true
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          curl -s -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${TELEGRAM_CHAT_ID}" \
-            -d "text=✅ inhouse-llm self-improve: no changes needed ($(date +%Y-%m-%d))" > /dev/null
-
-      - name: Notify via Telegram — syntax errors blocked
-        if: steps.gate.outputs.skip != 'true' && steps.check.outputs.has_changes == 'true' && steps.syntax.outputs.syntax_ok == 'false'
-        continue-on-error: true
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          curl -s -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${TELEGRAM_CHAT_ID}" \
-            -d "text=⚠️ inhouse-llm self-improve: syntax errors blocked commit ($(date +%Y-%m-%d))" > /dev/null
-
       - name: Notify via Telegram — skipped (no twin/ changes)
         if: steps.gate.outputs.skip == 'true'
         continue-on-error: true
@@ -216,3 +51,17 @@ jobs:
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TELEGRAM_CHAT_ID}" \
             -d "text=⏭ inhouse-llm self-improve: skipped — no twin/ changes since last run ($(date +%Y-%m-%d))" > /dev/null
+
+      - name: Join Tailscale
+        if: steps.gate.outputs.skip != 'true'
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          tags: tag:ci
+
+      - name: Run orch self-improve
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            ${{ secrets.SELFIMPROVE_SSH_TARGET }} \
+            'orch self-improve inhouse-llm'

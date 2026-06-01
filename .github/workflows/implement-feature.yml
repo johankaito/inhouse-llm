@@ -1,0 +1,32 @@
+name: Implement Feature
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  implement:
+    if: github.event.label.name == 'ready-to-implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Join Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          tags: tag:ci
+
+      - name: Dispatch orch task
+        env:
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          REPO: ${{ github.repository }}
+          SSH_TARGET: ${{ secrets.SELFIMPROVE_SSH_TARGET }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            "$SSH_TARGET" \
+            "orch task 'implement GitHub issue #${ISSUE_NUM} in ${REPO}: ${ISSUE_TITLE}. Read the full issue with gh issue view ${ISSUE_NUM} --repo ${REPO}. Label the issue ai-implementing before starting, ai-implemented after opening the PR. PR body must include Closes #${ISSUE_NUM}.' --no-linear --engine deliberate"

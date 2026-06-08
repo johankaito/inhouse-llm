@@ -1,0 +1,141 @@
+# Managed by `orch improve install` — do not edit by hand.
+# This file is fully generated from .improve/config.toml; re-run install to update.
+#
+# TOPOLOGY: this workflow owns ONLY the approved -> building lock transition and
+# the failure -> blocked path. It does NOT run the LLM and does NOT write code.
+# When a human adds the `improve:approved` label (GATE A), this workflow swaps
+# the issue to `improve:building` (the lock), joins Tailscale (tag:ci), SSHes to
+# the analysis host, and runs `orch improve implement`. The host dispatches the
+# Claude Code implementer session, which creates the improve/issue-N branch,
+# opens ONE PR with the HOST's gh auth, and swaps building -> built itself.
+# The runner needs NO ANTHROPIC_API_KEY and only issues:write (for label swaps).
+name: improve-implement
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+# Only the approved label arms this workflow. Any other label event is a no-op.
+# (GATE A — the single human-armed transition into the build path.)
+concurrency:
+  group: improve-impl-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    if: github.event.label.name == 'improve:approved'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # RE-ENTRANCY GUARD. If the issue is already building or built, a prior run
+      # (or a human) already moved it down the lifecycle. Re-adding approved must
+      # not kick off a second implement. Exit 0 as a clean no-op.
+      - name: Re-entrancy guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          LABELS=$(gh issue view "$ISSUE_NUM" --repo "$REPO" --json labels --jq '.labels[].name')
+          echo "Current labels: $LABELS"
+          if echo "$LABELS" | grep -qx 'improve:building' || echo "$LABELS" | grep -qx 'improve:built'; then
+            echo "already-in-flight: issue #$ISSUE_NUM is already building/built — no-op."
+            # A human re-added improve:approved to an issue that is already building/
+            # built. This guard is the ONLY step that runs on this path (every
+            # mutation step below is gated on skip != 'true'), so strip the spurious
+            # approved here — otherwise it would rest alongside building/built and
+            # break state-label mutual exclusivity. Tolerant.
+            gh issue edit "$ISSUE_NUM" --repo "$REPO" --remove-label improve:approved 2>/dev/null || true
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Acquire the lock: approved -> building. This is the gate that prevents a
+      # second concurrent implement of the same issue. Do it BEFORE dispatching.
+      - name: Lock — approved to building
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Acquire the lock FIRST: add improve:building (the state the re-entrancy
+          # guard checks). Doing this before any removal means the lock holds even
+          # if a later label op hiccups — a transient gh failure can never leave the
+          # issue in an un-locked, re-dispatchable state.
+          gh issue edit "$ISSUE_NUM" --repo "$REPO" --add-label improve:building
+          # State labels are mutually exclusive: strip every OTHER state label so
+          # improve:building is the only improve:* state at rest. Tolerant — most
+          # are absent, and a hiccup on any one must not abort the step or drop the
+          # lock acquired above. (Same loop-strip pattern as the outcome workflow.)
+          for L in improve:proposed improve:approved improve:rejected improve:blocked; do
+            gh issue edit "$ISSUE_NUM" --repo "$REPO" --remove-label "$L" 2>/dev/null || true
+          done
+
+      - name: Join Tailscale
+        if: steps.guard.outputs.skip != 'true'
+        uses: tailscale/github-action@v4
+        with:
+          # Non-expiring OAuth client (scope auth_keys:write, tag:ci) — the action
+          # mints a fresh ephemeral key each run, so this never breaks on key expiry.
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      # Dispatch implementation on the host. orch on mac-15 dispatches the
+      # Claude implementer session, which creates the branch, opens ONE PR with the
+      # HOST's gh auth, and swaps the issue building -> built. The runner only owns
+      # approved -> building (above) and the failure -> blocked path (below).
+      - name: Dispatch implementation on host
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          SSH_TARGET: ${{ secrets.SELFIMPROVE_SSH_TARGET }}
+        run: |
+          SSH_TARGET="${SSH_TARGET:-mac-15}"
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            "$SSH_TARGET" \
+            "orch improve implement --issue ${ISSUE_NUM} --repo ${REPO}"
+
+      # ON FAILURE: a dispatch/SSH failure means the implement never started (or
+      # the host could not be reached). The issue is stuck holding the building
+      # lock with no session working it. Move it building -> blocked so a human
+      # sees it needs attention, and (optionally) ping Telegram.
+      - name: Failure — building to blocked
+        if: failure() && steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # The implement step failed (dispatch/SSH error, or the lock's own
+          # add-label failed). Move to blocked, mutually exclusive: strip every
+          # other state label first (depending on where the failure hit, any of
+          # proposed/approved/building may still be present) then add blocked, so
+          # the issue never rests holding two coexisting state labels.
+          for L in improve:proposed improve:approved improve:building improve:built; do
+            gh issue edit "$ISSUE_NUM" --repo "$REPO" --remove-label "$L" 2>/dev/null || true
+          done
+          gh issue edit "$ISSUE_NUM" --repo "$REPO" --add-label improve:blocked || true
+
+      - name: Notify via Telegram — blocked
+        if: failure() && steps.guard.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+        run: |
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && exit 0
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=⛔ improve-implement johankaito/inhouse-llm: dispatch FAILED for issue #${ISSUE_NUM} — marked improve:blocked, needs a human ($(date +%Y-%m-%d))" > /dev/null

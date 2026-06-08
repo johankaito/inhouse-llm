@@ -1,0 +1,9 @@
+repo = "johankaito/inhouse-llm"
+scope = ["**"]
+review_required = ["README.md", "CLAUDE.md", "*.config.*", "package.json", ".github/**"]
+ssh_target = "mac-15"
+schedule = "0 22 * * *"
+reject_disposition = "denylist"
+max_suggestions = 5
+confidence = 0.9
+dedup_window_days = 30

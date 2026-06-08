@@ -1,0 +1,211 @@
+# Managed by `orch improve install` — do not edit by hand.
+# This file is fully generated from .improve/config.toml; re-run install to update.
+#
+# TOPOLOGY: this workflow runs ENTIRELY IN-RUNNER (cheap git + gh; no host
+# dispatch, no LLM). It fires when an improve/issue-* PR closes and records the
+# terminal outcome — Gate B. A MERGED PR means a human accepted the change: log
+# ACCEPTED, ensure the issue is closed, and re-trigger improve-analyze so the
+# loop keeps proposing. A CLOSED-UNMERGED PR means rejection: log REJECTED,
+# denylist the improve-hash so it is never re-proposed, and relabel the issue
+# improve:rejected. Either way, no auto-merge anywhere — the human owns the
+# merge decision; this workflow only reacts to it.
+#
+# LEDGER BRANCH: outcomes.md (and the denylist it contains) is mutable bot-state,
+# so it lives on the dedicated, never-protected `improve/ledger` branch — NOT the
+# default branch. This workflow fetches + checks out improve/ledger, appends the
+# outcome there, and pushes ONLY that branch. It NEVER commits or pushes the
+# default branch (which may be protected). Label edits via gh are plain API calls
+# and are unaffected by branch protection.
+name: improve-outcome
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+jobs:
+  outcome:
+    # Only PRs from an improve/issue-* head branch concern us.
+    if: startsWith(github.event.pull_request.head.ref, 'improve/issue-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Check out the LEDGER branch (not the default branch). All mutations this
+      # workflow makes target improve/ledger. If the branch does not exist yet,
+      # the later steps create it locally and push it. We use a fetch-all clone so
+      # `git fetch origin improve/ledger` works even on a fresh checkout.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      # Materialize improve/ledger into ./ledger (a throwaway worktree) so we can
+      # edit outcomes.md there without ever touching the default-branch checkout.
+      # If origin lacks the branch (first ever outcome), seed it orphaned.
+      - name: Prepare ledger worktree
+        id: ledger
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin improve/ledger 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/improve/ledger; then
+            git worktree add ledger origin/improve/ledger
+            ( cd ledger && (git switch -c improve/ledger 2>/dev/null || git switch improve/ledger) )
+          else
+            git worktree add --detach ledger HEAD
+            ( cd ledger && git checkout --orphan improve/ledger && git rm -rf --cached --ignore-unmatch . >/dev/null 2>&1 || true )
+          fi
+          mkdir -p ledger/.improve
+          [ -f ledger/.improve/outcomes.md ] || printf '# Outcomes\n\n## Outcomes\n\n## Never-Repropose (Denylist)\n' > ledger/.improve/outcomes.md
+          echo "dir=ledger" >> "$GITHUB_OUTPUT"
+
+      # Derive the issue number. Prefer the head ref improve/issue-N; fall back to
+      # the first `Closes #N` reference in the PR body if the ref is malformed.
+      - name: Derive issue number
+        id: derive
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          ISSUE="${HEAD_REF#improve/issue-}"
+          # Strip anything after the leading digits (defensive — ref should be exact).
+          ISSUE=$(printf '%s' "$ISSUE" | grep -oE '^[0-9]+' || true)
+          if [ -z "$ISSUE" ]; then
+            ISSUE=$(printf '%s' "$PR_BODY" | grep -oiE 'closes #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+          fi
+          if [ -z "$ISSUE" ]; then
+            echo "Could not derive an issue number from head ref or PR body — nothing to record."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Derived issue #$ISSUE"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+
+      # ----- ACCEPTED path: PR was merged -----
+      - name: Record ACCEPTED outcome
+        if: steps.derive.outputs.found == 'true' && github.event.pull_request.merged == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ steps.derive.outputs.issue }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          OUT=ledger/.improve/outcomes.md
+          DATE=$(date -u +%Y-%m-%d)
+          LINE="ACCEPTED PR-${PR_NUM} issue-${ISSUE_NUM} ${DATE}"
+          # Append the line directly under the "## Outcomes" header.
+          awk -v line="$LINE" '
+            { print }
+            /^## Outcomes[[:space:]]*$/ && !done { print line; done=1 }
+          ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+
+          # Verify the merge auto-closed the issue (the Closes #N reference). If it
+          # is somehow still open, close it explicitly. (gh is an API call —
+          # unaffected by branch protection.)
+          STATE=$(gh issue view "$ISSUE_NUM" --repo "$REPO" --json state --jq .state 2>/dev/null || echo "")
+          if [ "$STATE" = "OPEN" ]; then
+            echo "Issue #$ISSUE_NUM still OPEN after merge — closing explicitly."
+            gh issue close "$ISSUE_NUM" --repo "$REPO" --comment "Closing: PR #${PR_NUM} merged (improve loop, Closes-reference did not auto-close)." || true
+          fi
+
+          # Mutual exclusivity: a merged (accepted) issue rests on improve:built.
+          # Strip any other state label that may have lingered upstream (e.g. a
+          # transient gh failure during the build->built swap) so exactly one
+          # improve:* state remains. Tolerant — each removal is best-effort.
+          for L in improve:proposed improve:approved improve:building improve:rejected improve:blocked; do
+            gh issue edit "$ISSUE_NUM" --repo "$REPO" --remove-label "$L" 2>/dev/null || true
+          done
+
+      - name: Commit outcomes to ledger (ACCEPTED)
+        if: steps.derive.outputs.found == 'true' && github.event.pull_request.merged == true
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+          ISSUE_NUM: ${{ steps.derive.outputs.issue }}
+        run: |
+          cd ledger
+          git add .improve/outcomes.md
+          if git diff --cached --quiet; then
+            echo "No outcomes change to commit."
+          else
+            git commit -m "chore(improve): record ACCEPTED outcome for issue #${ISSUE_NUM} (PR #${PR_NUM})"
+            git push -u origin improve/ledger
+          fi
+
+      # Re-trigger analyze ONLY on a merged (accepted) outcome — a successful land
+      # is the cue to look for the next batch of improvements.
+      - name: Re-trigger improve-analyze (merge only)
+        if: steps.derive.outputs.found == 'true' && github.event.pull_request.merged == true
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh workflow run improve-analyze.yml --repo "$REPO" || \
+            echo "Could not re-trigger improve-analyze.yml (workflow may not be present)."
+
+      # ----- REJECTED path: PR was closed without merging -----
+      - name: Record REJECTED outcome + denylist
+        if: steps.derive.outputs.found == 'true' && github.event.pull_request.merged != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ steps.derive.outputs.issue }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          OUT=ledger/.improve/outcomes.md
+          DATE=$(date -u +%Y-%m-%d)
+          LINE="REJECTED PR-${PR_NUM} issue-${ISSUE_NUM} ${DATE}"
+          awk -v line="$LINE" '
+            { print }
+            /^## Outcomes[[:space:]]*$/ && !done { print line; done=1 }
+          ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+
+          # Recover the improve-hash from the issue body so future analyze runs
+          # never re-propose this rejected change. The marker is <!-- improve-hash:HASH -->.
+          BODY=$(gh issue view "$ISSUE_NUM" --repo "$REPO" --json body --jq .body 2>/dev/null || echo "")
+          HASH=$(printf '%s' "$BODY" | grep -oE 'improve-hash:[0-9a-fA-F]+' | head -1 | cut -d: -f2 || true)
+          if [ -n "$HASH" ]; then
+            # Append the hash under the "## Never-Repropose (Denylist)" header.
+            awk -v hash="$HASH" -v issue="$ISSUE_NUM" '
+              { print }
+              /^## Never-Repropose \(Denylist\)[[:space:]]*$/ && !done { print hash " (issue-" issue ", rejected)"; done=1 }
+            ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+            echo "Denylisted improve-hash $HASH for issue #$ISSUE_NUM."
+          else
+            echo "WARN: no improve-hash marker found on issue #$ISSUE_NUM — recorded REJECTED but could not denylist."
+          fi
+
+          # Move to the terminal rejected state. Denylist disposition: no
+          # auto-retry, do NOT reopen to approved. State labels are mutually
+          # exclusive, so strip every non-terminal improve:* state first (most
+          # will be absent — each removal is tolerant) and leave improve:rejected
+          # as the only state. (gh is an API call — unaffected by branch protection.)
+          for L in improve:proposed improve:approved improve:building improve:built improve:blocked; do
+            gh issue edit "$ISSUE_NUM" --repo "$REPO" --remove-label "$L" 2>/dev/null || true
+          done
+          gh issue edit "$ISSUE_NUM" --repo "$REPO" --add-label improve:rejected || true
+
+      - name: Commit outcomes to ledger (REJECTED)
+        if: steps.derive.outputs.found == 'true' && github.event.pull_request.merged != true
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+          ISSUE_NUM: ${{ steps.derive.outputs.issue }}
+        run: |
+          cd ledger
+          git add .improve/outcomes.md
+          if git diff --cached --quiet; then
+            echo "No outcomes change to commit."
+          else
+            git commit -m "chore(improve): record REJECTED outcome + denylist for issue #${ISSUE_NUM} (PR #${PR_NUM})"
+            git push -u origin improve/ledger
+          fi

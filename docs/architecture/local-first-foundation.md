@@ -1,8 +1,8 @@
 # Local-First Foundation — zero-API-token, model- and engine-swappable
 
 **Tracking issue:** [#12](https://github.com/johankaito/inhouse-llm/issues/12)
-**Date:** 2026-06-10
-**Status:** Proposed
+**Date:** 2026-06-10 (statuses updated 2026-06-11)
+**Status:** Stages 0–3 implemented and verified on the M1 Max (see §6 statuses and §7 verification evidence)
 **Author:** John Keto
 **Companion:** [`docs/evaluations/open-source-alternatives.md`](../evaluations/open-source-alternatives.md)
 
@@ -104,11 +104,11 @@ Notes:
 
 Each stage is independently shippable and reversible. **`twin`'s text-edit-format technique is preserved at every stage** — it is the harness-independent, robust-on-small-models asset, and the fallback if any external harness is dropped.
 
-- **Stage 0 — baseline (today, Mac-only).** Keep Ollama + Qwen-Coder + `twin` exactly as-is: text-edit-format loop, explicit `num_ctx=32768`, local RAG. Nothing breaks; this is the safety net.
-- **Stage 1 — adopt OpenCode as daily driver (hours).** Install OpenCode (pinned version), point it at the **same local endpoint via the `model` field**, confirm the **zero-key offline path** and **`num_ctx` ≈16–32k**. **Repoint `twin`'s `/edit` from Aider to OpenCode** (Aider has had no release since 2025-08-09). Keep Aider only as a fallback until OpenCode is proven. *(Stage 1's offline path is validated first-hand in the evaluation doc.)*
-- **Stage 2 — stand up `llama-server --jinja` (days).** Run it as an alternative engine behind the same contract; A/B against Ollama. Pin the `(engine version, model, chat template)` tuple. Adopt the q8_0 KV-cache floor.
-- **Stage 3 — invert the MCP gap (days, Path B).** Expose `twin`'s differentiated tools (local RAG, `gh` search, mode/5-Whys, self-improve) as an **MCP server** consumed by OpenCode. This gives the maintained TS host `twin`'s unique capabilities **without rewriting MCP into Python**, and lets OpenCode absorb the editing role so the stack shrinks.
-- **Stage 4 — add the home-server (when the RTX 5090 lands; timeline unconfirmed).** Run `llama-server --jinja` on the server, put **`llama-swap` in front** to route by `model` field across Mac + server. **No harness change** — purely base-URL/model routing.
+- **Stage 0 — baseline. DONE (pre-existing).** Ollama + Qwen-Coder + `twin`: text-edit-format loop, explicit `num_ctx=32768`, local RAG. Still the safety net.
+- **Stage 1 — adopt OpenCode as daily driver. DONE (2026-06-11).** OpenCode pinned at **1.17.1** (npm `opencode-ai`), pointed at local Ollama `/v1` via the `model` field. Zero-key multi-step edit validated first-hand (§7). `num_ctx` handled by a Modelfile-baked variant (`qwen2.5-coder:14b-ctx32k`, `PARAMETER num_ctx 32768`) because Ollama's `/v1` path does not honour per-request `num_ctx`. `twin`'s `/edit` repointed: `editor.command=opencode` with `editor.fallback=aider` and `editor.model` override in `twin.config.json`. Config example: `docs/setup/opencode.json.example`.
+- **Stage 2 — stand up `llama-server --jinja`. DONE (2026-06-11).** `scripts/llama-server.sh` serves GGUFs **directly from Ollama's blob store** (no duplicate storage), `--jinja`, `--ctx-size 32768`, KV q8_0 floor. Native `tool_calls` verified over `/v1` (§7). `twin`'s `openai-compat` engine adapter verified against it streaming and non-streaming. Pinned tuple: llama.cpp **b9580** + qwen3-coder GGUF + embedded template.
+- **Stage 3 — invert the MCP gap. DONE (2026-06-11).** `twin/lib/mcp_server.py`: zero-dependency stdio MCP server exposing `repo_search` (+ `gh_search_code`/`gh_get_pr` when `GITHUB_TOKEN` is present). Registered in OpenCode (`mcp.twin`); end-to-end verified — OpenCode + qwen3-coder natively invoked `twin_repo_search` and used the RAG results (§7).
+- **Stage 4 — add the home-server. PENDING (RTX 5090; timeline unconfirmed).** Run `llama-server --jinja` on the server, put **`llama-swap` in front** to route by `model` field across Mac + server. **No harness change** — purely base-URL/model routing.
 
 ### What stays, regardless of harness
 
@@ -116,6 +116,31 @@ Each stage is independently shippable and reversible. **`twin`'s text-edit-forma
 - **The harness contract** (§1) — the reason every swap above is config, not code.
 - **Explicit `num_ctx`** and the **q8_0 KV floor** — the two settings that most protect output quality on 32 GB.
 - **`twin`'s differentiators** — RAG, mode detection, 5-Whys, Claude-format context, self-improve — surfaced to whatever harness is in front via MCP.
+
+---
+
+## 7. Verification evidence (2026-06-11, M1 Max 32GB)
+
+### Tool-calling A/B matrix — same prompt, same `tools` array
+
+| Model | Ollama `/v1` | `llama-server --jinja` (b9580) |
+|---|---|---|
+| qwen2.5-coder:14b | ✗ tool call emitted as fenced-JSON **text**; zero tools executed | ✗ tool call emitted as `<tools>`-wrapped **text**; `tool_calls: null` |
+| qwen3-coder (30B-A3B) | ✓ full OpenCode loop: Read → Edit → Write → bash; tests pass | ✓ native `tool_calls`, `finish_reason: tool_calls` |
+
+**Conclusion:** the failure follows the **model**, not the engine. qwen2.5-generation models are below the native-function-calling floor for Claude-Code-style loops on either engine; qwen3-coder clears it on both. This is risk #2 (edit-format/tool-call non-adherence) observed first-hand, and is why `twin.config.json` gained the `agentic` alias and `editor.model` pins qwen3-coder for `/edit`.
+
+### Stage 1 — OpenCode zero-key multi-step edit (Ollama `/v1`, qwen3-coder)
+
+Task: add `subtract()` to `calc.py`, create `test_calc.py`, run it. Executed with `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` unset against `localhost:11434/v1`. Result: both edits applied via native tool calls, generated unittest suite ran `OK` (2 tests). Caveat: first call pays ~1 min of 18GB model load — budget timeouts accordingly.
+
+### Stage 2 — twin `openai-compat` adapter vs llama-server
+
+`build_engine({provider: openai-compat, base_url: http://127.0.0.1:8080/v1})` → non-streaming round trip 0.7s, streaming 29 chunks 0.7s, `num_ctx`/`keep_alive` correctly withheld (server-side concerns). Engine swap is a 2-line config change, zero harness code touched.
+
+### Stage 3 — OpenCode → twin MCP → RAG
+
+`opencode mcp list` shows `twin connected`. Live run: qwen3-coder natively invoked `twin_repo_search {"query": "engine adapter harness contract", "path": "twin/lib"}` and summarised the top RAG hit correctly. Tool surface exposed: 1–3 tools (flat schemas), honouring the ≤8 ceiling.
 
 ---
 

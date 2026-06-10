@@ -1,0 +1,43 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ollama/qwen3-coder:latest",
+  "mcp": {
+    "twin": {
+      "type": "local",
+      "command": ["python3", "REPO_PATH/twin/lib/mcp_server.py"],
+      "enabled": true
+    }
+  },
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local, zero-key)",
+      "options": {
+        "baseURL": "http://localhost:11434/v1"
+      },
+      "models": {
+        "qwen3-coder:latest": {
+          "name": "Qwen3 Coder 30B-A3B (daily driver)"
+        },
+        "qwen2.5-coder:14b-ctx32k": {
+          "name": "Qwen2.5 Coder 14B ctx32k"
+        },
+        "qwen2.5-coder:32b": {
+          "name": "Qwen2.5 Coder 32B (max quality)"
+        }
+      }
+    },
+    "llama-server": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-server (local, zero-key)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1"
+      },
+      "models": {
+        "qwen3-coder": {
+          "name": "Qwen3 Coder via llama-server --jinja"
+        }
+      }
+    }
+  }
+}

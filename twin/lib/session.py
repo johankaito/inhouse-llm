@@ -832,8 +832,8 @@ OUTPUT: {output}
             # Choose model for this call (vision override if needed, otherwise router/alias)
             model_name = vision_model if (images and vision_model) else self._resolve_model_name()
 
-            # Use Ollama Python library for chat (supports streaming and images)
-            import ollama as ollama_lib
+            # Resolve the configured engine (vision calls stay on native Ollama)
+            engine = self._get_engine(vision=bool(images))
             import threading  # ensure available for timer
 
             stream_enabled = bool(self.config.get("twin_config", {}).get("generation_params", {}).get("stream", False))
@@ -874,7 +874,7 @@ OUTPUT: {output}
             try:
                 if stream_enabled:
                     response_chunks: List[str] = []
-                    for chunk in ollama_lib.chat(
+                    for chunk in engine.chat(
                         model=model_name,
                         messages=messages_for_call,
                         options=options,
@@ -896,7 +896,7 @@ OUTPUT: {output}
                     if timer_thread:
                         timer_thread.join(timeout=1)
                 else:
-                    response_text = ollama_lib.chat(
+                    response_text = engine.chat(
                         model=model_name,
                         messages=messages_for_call,
                         options=options
@@ -1187,9 +1187,28 @@ OUTPUT: {output}
   Mode:         {self.mode.upper()}
 """)
 
+    def _resolve_editor(self) -> Optional[str]:
+        """Pick the configured editor command, falling back if missing."""
+        editor_cfg = self.config.get('twin_config', {}).get('editor', {})
+        command = editor_cfg.get('command', 'aider')
+        fallback = editor_cfg.get('fallback')
+
+        if shutil.which(command):
+            return command
+        if fallback and shutil.which(fallback):
+            console.print(f"[yellow]⚠️  {command} not found — falling back to {fallback}[/yellow]\n")
+            return fallback
+        wanted = command + (f" or {fallback}" if fallback else "")
+        console.print(f"[red]No editor available ({wanted}). Install one to use /edit.[/red]\n")
+        return None
+
     def _transition_to_aider(self):
-        """Transition from planning to Aider for implementation"""
-        console.print("\n[cyan]Preparing to launch Aider...[/cyan]\n")
+        """Transition from planning to the configured editor for implementation"""
+        editor = self._resolve_editor()
+        if editor is None:
+            return
+
+        console.print(f"\n[cyan]Preparing to launch {editor}...[/cyan]\n")
 
         # Save current session
         self._save_session()
@@ -1222,23 +1241,32 @@ Next Steps:
         # Ask which files to edit
         files = Prompt.ask("Which files do you want to edit? (space-separated, or press Enter for none)")
 
-        # Build aider command
-        aider_cmd = ['aider', f'--model=ollama/{self.model}']
+        editor_cfg = self.config.get('twin_config', {}).get('editor', {})
+        model_name = editor_cfg.get('model') or self._resolve_model_name()
+        if editor == 'opencode':
+            prompt_parts = ["Implement the next steps from the attached planning summary."]
+            if files.strip():
+                prompt_parts.append(f"Focus on these files: {files.strip()}.")
+            editor_cmd = [
+                'opencode', 'run',
+                ' '.join(prompt_parts),
+                '-m', f'ollama/{model_name}',
+                '-f', temp_path,
+            ]
+        else:
+            editor_cmd = [editor, f'--model=ollama/{model_name}']
+            if files.strip():
+                editor_cmd.extend(files.split())
+            editor_cmd.extend(['--read', temp_path])
 
-        if files.strip():
-            aider_cmd.extend(files.split())
-
-        # Add planning context as read-only
-        aider_cmd.extend(['--read', temp_path])
-
-        console.print(f"\n[cyan]Launching Aider:[/cyan] {' '.join(aider_cmd)}\n")
+        console.print(f"\n[cyan]Launching {editor}:[/cyan] {' '.join(editor_cmd)}\n")
 
         try:
-            subprocess.run(aider_cmd)
+            subprocess.run(editor_cmd)
         except KeyboardInterrupt:
-            console.print("\n[yellow]Aider interrupted[/yellow]\n")
+            console.print(f"\n[yellow]{editor} interrupted[/yellow]\n")
         except Exception as e:
-            console.print(f"\n[red]Error launching Aider: {e}[/red]\n")
+            console.print(f"\n[red]Error launching {editor}: {e}[/red]\n")
 
         # Clean up temp file
         try:
@@ -1246,7 +1274,7 @@ Next Steps:
         except:
             pass
 
-        console.print("\n[green]Returned from Aider[/green]\n")
+        console.print(f"\n[green]Returned from {editor}[/green]\n")
 
     def _reload_modules(self):
         """Reload twin modules to get latest code changes"""
@@ -1949,6 +1977,25 @@ Next Steps:
             if clean:
                 return clean[:120] + ("..." if len(clean) > 120 else "")
         return "(no topic)"
+
+    def _get_engine(self, vision: bool = False):
+        """Resolve the chat engine per the harness contract (engine.py).
+
+        Vision calls always use the native Ollama engine: image payloads and
+        vision-model discovery are Ollama-specific.
+        """
+        from engine import build_engine, OllamaEngine
+
+        if vision:
+            twin_config = self.config.get('twin_config', {})
+            ollama_cfg = twin_config.get('ollama', {})
+            return OllamaEngine(
+                base_url=ollama_cfg.get('base_url', 'http://localhost:11434'),
+                timeout=ollama_cfg.get('timeout', 120),
+            )
+        if getattr(self, '_engine', None) is None:
+            self._engine = build_engine(self.config)
+        return self._engine
 
     def _build_ollama_options(self) -> Dict[str, Any]:
         """Build Ollama generation options from config"""

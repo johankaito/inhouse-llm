@@ -32,6 +32,12 @@
       "speed": "4-6 tokens/sec",
       "ram": "25-28GB"
     },
+    "agentic": {
+      "model": "qwen3-coder:latest",
+      "description": "Agentic tool-calling daily driver (30B MoE, 3B active) — the only local model verified to drive OpenCode's native tool loop",
+      "speed": "15-25 tokens/sec",
+      "ram": "20-22GB"
+    },
     "reasoning": {
       "model": "deepseek-r1:8b",
       "description": "Reasoning-focused for planning and decisions",
@@ -56,6 +62,17 @@
   "mode_defaults": {
     "work": "balanced",
     "personal": "balanced"
+  },
+  "engine": {
+    "provider": "ollama",
+    "base_url": "http://localhost:11434",
+    "api_key": "",
+    "timeout": 120
+  },
+  "editor": {
+    "command": "opencode",
+    "fallback": "aider",
+    "model": "qwen3-coder:latest"
   },
   "ollama": {
     "base_url": "http://localhost:11434",

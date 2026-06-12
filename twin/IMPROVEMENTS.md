@@ -58,6 +58,15 @@ Each improvement includes:
 - Files: twin/tests/test_hot_reload_and_augment.py (new), twin/lib/session.py (auto_apply)
 - Commit: (pending)
 
+## 2025-07-25 - Safety hardening (subprocess timeouts, grep cap, bare except), test coverage for agents.py and context.py
+- Added subprocess timeouts to all git calls in self_improver.py
+- Fixed bare `except` → `except Exception` in self_improver.py
+- Added MAX_MATCHES=500 cap to grep tool to prevent OOM
+- Added test suites for context.py (17 tests) and agents.py (12 tests)
+- Proposed citation-style answer enrichment (backlog pick)
+- Files: twin/lib/self_improver.py, twin/lib/tools.py, twin/tests/test_context.py, twin/tests/test_agents.py
+- Commit: (pending)
+
 ## Pending / Proposed Improvements (tracked for parity)
 
 | Status   | Item                                                              | Impact (relative) |

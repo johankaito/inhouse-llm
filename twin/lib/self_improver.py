@@ -43,7 +43,8 @@ Each improvement includes:
             result = subprocess.run(
                 ['git', 'rev-parse', '--git-dir'],
                 cwd=self.twin_dir,
-                capture_output=True
+                capture_output=True,
+                timeout=10
             )
             if result.returncode != 0:
                 return False
@@ -53,7 +54,8 @@ Each improvement includes:
                 ['git', 'status', '--porcelain'],
                 cwd=self.twin_dir,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=10
             )
 
             # Allow improvement if no changes or only IMPROVEMENTS.md changed
@@ -64,7 +66,7 @@ Each improvement includes:
             lines = changes.split('\n')
             return all('IMPROVEMENTS.md' in line for line in lines)
 
-        except:
+        except Exception:
             return False
 
     def propose_improvement(
@@ -190,7 +192,8 @@ See IMPROVEMENTS.md for full reasoning."""
                 ['git', 'diff', 'HEAD'] + files_changed,
                 cwd=self.twin_dir,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=30
             )
             return result.stdout
         except Exception as e:
